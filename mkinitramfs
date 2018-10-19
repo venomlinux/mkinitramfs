@@ -1,0 +1,298 @@
+#!/bin/bash -e
+# This file based in part on the mkinitramfs script for the LFS LiveCD
+# written by Alexander E. Patrakov and Jeremy Huntwork.
+
+copy()
+{
+	local file
+
+	if [ "$2" == "lib" ]; then
+		file=$(PATH=/lib:$ROOT/usr/lib type -p $1)
+	else
+		file=$(PATH=/bin:$ROOT/usr/bin:$ROOT/sbin:$ROOT/usr/sbin type -p $1)
+	fi
+
+	if [ ! -z $file ] ; then
+		cp $file $WDIR/$2
+	elif [ "$SKIP" = 1 ]; then
+		echo "SKIP: $1"
+	else
+		echo "Missing required file: $1 for directory $2"
+		rm -rf $WDIR
+    exit 1
+  fi
+}
+
+interrupted() {
+	cleanup
+	echo; echo "Aborted by user!"
+	exit 1
+}
+
+cleanup() {
+	rm -fr $WDIR $unsorted
+}
+
+usage() {
+	
+	cat << EOF
+Usage:
+  $(basename $0) <option> <argument>
+
+Options:
+  -k <arg>  custom kernel version
+  -o <arg>  custom output name
+  -i <arg>  use custom init file
+  -n        dont copy kernel modules
+  -f        dont copy firmware
+  -h        print this help msg
+  -m        loaded modules only
+	
+EOF
+}
+
+trap "interrupted" SIGHUP SIGINT SIGQUIT SIGTERM
+
+while [ $1 ]; do
+	case $1 in
+		-k) KERNEL=$2
+			if [ -z $2 ]; then
+				echo "argument is needed for this option"
+				exit 1
+			fi
+			shift 2 ;;
+		-o) OUTPUT=$2
+			if [ -z $2 ]; then
+				echo "argument is needed for this option"
+				exit 1
+			fi
+			shift 2 ;;
+		-i) INIT=$2
+			if [ -z $2 ]; then
+				echo "argument is needed for this option"
+				exit 1
+			fi
+			shift 2 ;;
+		-m) LOADEDMOD=1
+			shift ;;
+		-n) NOKMOD=1
+			shift ;;
+		-f) NOFIRMWARE=1
+			shift ;;
+		-h) usage
+			exit 0 ;;
+		*) echo "ERROR: invalid '$1' option"
+			exit 1 ;;
+	esac
+done
+
+if [ ! -d  ]; then
+	echo "ERROR: directory  does not exist!"
+	exit 1
+fi
+
+if [ "$KERNEL" ]; then
+	if [ -d /lib/modules/"$KERNEL" ]; then
+		KERNEL_VERSION="$KERNEL"
+	else
+		echo "ERROR: kernel directory '/lib/modules/$KERNEL' not exist"
+		exit 1
+	fi
+else
+	if [ -d /lib/modules/$(uname -r) ]; then
+		KERNEL_VERSION=$(uname -r)
+	else
+		NOKMOD=1
+	fi
+fi
+
+INITRAMFS_FILE=initrd-$KERNEL_VERSION.img
+
+if [ "$NOKMOD" = 1 ]; then
+	INITRAMFS_FILE=initrd-no-kmod.img
+fi
+
+if [ "$OUTPUT" ]; then
+	INITRAMFS_FILE="$OUTPUT"
+fi
+
+if [ "$INIT" ]; then
+	INITIN="$INIT"
+else
+	INITIN="/usr/share/mkinitramfs/init.in"
+fi
+
+if [ ! -f "$INITIN" ]; then
+	echo "ERROR: file init '$INITIN' not exist"
+	exit 1
+fi
+
+echo "Creating $INITRAMFS_FILE..."
+
+binaries="sh cat cp dd killall ls mkdir mknod mount find xargs grep fgrep"
+binaries="$binaries umount sed sleep ln rm uname chroot chmod"
+binaries="$binaries readlink basename modprobe blkid switch_root"
+
+# Systemd installs udevadm in /bin. Other udev implementations have it in /sbin
+if [ -x /bin/udevadm ] ; then binaries="$binaries udevadm"; fi
+
+# Optional files and locations
+for f in mdadm mdmon udevd udevadm; do
+	if [ -x /sbin/$f ] ; then binaries="$binaries $f"; fi
+done
+
+unsorted=$(mktemp /tmp/unsorted.XXXXXXXXXX)
+
+# Create a temporary working directory
+echo " creating working directory..."
+WDIR=$(mktemp -d /tmp/initrd-work.XXXXXXXXXX)
+
+# Create base directory structure
+echo " creating base structure directory..."
+mkdir -p $WDIR/{bin,dev,lib/firmware,run,sys,proc,usr}
+mkdir -p $WDIR/etc/{modprobe.d,udev/rules.d}
+touch $WDIR/etc/modprobe.d/modprobe.conf
+ln -s lib $WDIR/lib64
+ln -s ../bin $WDIR/usr/bin
+ln -s bin $WDIR/sbin
+ln -s ../bin $WDIR/usr/sbin
+
+# Create necessary device nodes
+echo " creating device nodes..."
+mknod -m 640 $WDIR/dev/console c 5 1
+mknod -m 664 $WDIR/dev/null    c 1 3
+
+# Install the udev configuration files
+echo " copying udev configuration..."
+if [ -f /etc/udev/udev.conf ]; then
+	cp /etc/udev/udev.conf $WDIR/etc/udev/udev.conf
+fi
+
+for file in $(find /etc/udev/rules.d/ -type f) ; do
+	cp $file $WDIR/etc/udev/rules.d
+done
+
+if [ -d /lib/udev ]; then
+	cp -a /lib/udev $WDIR/lib
+fi
+# remove unneeded udev rules
+rm -f $WDIR/lib/udev/rules.d/60-vboxdrv.rules $WDIR/lib/udev/rules.d/69-xorg-vmmouse.rules
+if [ -d /lib/systemd ]; then
+	cp -a /lib/systemd $WDIR/lib
+fi
+
+# Add udevd libraries if not in /sbin
+if [ -x /lib/udev/udevd ] ; then
+	ldd /lib/udev/udevd | sed "s/\t//" | cut -d " " -f1 >> $unsorted
+elif [ -x /lib/systemd/systemd-udevd ] ; then
+	ldd /lib/systemd/systemd-udevd | sed "s/\t//" | cut -d " " -f1 >> $unsorted
+fi
+
+# Install firmware
+if [ "$NOFIRMWARE" != 1 ]; then
+	echo " copying firmware..."
+	cp -a /lib/firmware $WDIR/lib
+fi
+
+# Copy the RAID configuration file if present
+if [ -f /etc/mdadm.conf ] ; then
+	echo " copying raid configuration..."
+	cp /etc/mdadm.conf $WDIR/etc
+fi
+
+# Install the init file
+echo " copying init file..."
+install -m0755 $INITIN $WDIR/init
+
+if [ "$NOKMOD" != 1 ]; then
+	if [ -x /bin/kmod ] ; then
+		binaries="$binaries kmod"
+	else
+		binaries="$binaries lsmod"
+		binaries="$binaries insmod"
+	fi
+fi
+
+# Add lvm if present
+if [ -x /sbin/lvm ] ; then binaries="$binaries lvm dmsetup"; fi
+
+echo " copying basic binaries..."
+for i in $binaries; do
+	copy $i bin
+	ldd $(PATH=/bin:$ROOT/usr/bin:$ROOT/sbin:$ROOT/usr/sbin type -p $i) | sed "s/\t//" | cut -d " " -f1 >> $unsorted
+done
+
+# Add module symlinks if appropriate
+if [ -n "$KERNEL_VERSION" ] && [ -x /bin/kmod ] ; then
+	ln -s kmod $WDIR/bin/lsmod
+	ln -s kmod $WDIR/bin/insmod
+fi
+
+# Add lvm symlinks if appropriate
+# Also copy the lvm.conf file
+if  [ -x /sbin/lvm ] ; then
+	ln -s lvm $WDIR/sbin/lvchange
+	ln -s lvm $WDIR/sbin/lvrename
+	ln -s lvm $WDIR/sbin/lvextend
+	ln -s lvm $WDIR/sbin/lvcreate
+	ln -s lvm $WDIR/sbin/lvdisplay
+	ln -s lvm $WDIR/sbin/lvscan
+
+	ln -s lvm $WDIR/sbin/pvchange
+	ln -s lvm $WDIR/sbin/pvck
+	ln -s lvm $WDIR/sbin/pvcreate
+	ln -s lvm $WDIR/sbin/pvdisplay
+	ln -s lvm $WDIR/sbin/pvscan
+
+	ln -s lvm $WDIR/sbin/vgchange
+	ln -s lvm $WDIR/sbin/vgcreate
+	ln -s lvm $WDIR/sbin/vgscan
+	ln -s lvm $WDIR/sbin/vgrename
+	ln -s lvm $WDIR/sbin/vgck
+	# Conf file(s)
+	cp -a /etc/lvm $WDIR/etc
+fi
+
+# Install libraries
+echo " copying library..."
+sort $unsorted | uniq | grep -v ^not$ | while read library ; do
+	if [ "$library" == "linux-vdso.so.1" ] || [ "$library" == "linux-gate.so.1" ]; then
+		continue
+	fi
+	copy $library lib
+done
+
+# copy terminfo
+if [ -d /usr/share/terminfo ]; then
+	echo " copying terminfo..."
+	mkdir -p $WDIR/usr/share
+	cp -r /usr/share/terminfo $WDIR/usr/share/
+fi
+
+# Install the kernel modules if requested
+if [ "$NOKMOD" != 1 ]; then
+	if [ "$LOADEDMOD" = 1 ]; then
+		echo " copying loaded modules..."
+		for k in $(lsmod | awk '{print $1}'); do
+			find /lib/modules/$KERNEL_VERSION/kernel/ -name $k.ko* -type f | cpio --make-directories -p --quiet $WDIR
+		done
+	else
+		echo " copying all modules..."
+		find /lib/modules/$KERNEL_VERSION/kernel/ \
+		 -name *.ko* -type f 2> /dev/null | cpio --make-directories -p --quiet $WDIR
+	fi
+	cp /lib/modules/$KERNEL_VERSION/modules.{builtin,order} \
+			$WDIR/lib/modules/$KERNEL_VERSION
+
+	depmod -b $WDIR $KERNEL_VERSION
+fi
+
+echo " compressing initramfs..."
+rm -f $INITRAMFS_FILE
+( cd $WDIR ; find . | cpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS_FILE
+
+# Remove the temporary directory and file
+cleanup
+echo "done"
+
+exit 0
