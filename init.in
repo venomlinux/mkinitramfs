@@ -57,22 +57,18 @@ do_mount_root() {
 
 findmedia() {
 	msg "Finding media..."
-	for device in /dev/sd* /dev/sr*; do
+	for device in /dev/sd* /dev/sr* /dev/loop*; do
+		[ -b $device ] || continue
 		msg "Find in $device..."
 		mount -o ro $device $MEDIUM 2>/dev/null && \
 		if [ -f $MEDIUM/isolinux/venomlive ]; then
-			msg "media found: $device"
+			msg "Media found: $device"
 			VENOMCD=$device
 			break
 		else
-			msg "Not Venom media, unmounting $device..."
 			umount $MEDIUM
 		fi
 	done
-	if [ "$VENOMCD" = "" ]; then
-		msg "media not found!"
-		problem
-	fi
 }
 
 msg "Starting initrd..."
@@ -87,6 +83,7 @@ device=
 initramfs=
 verbose=
 live=
+delay=5
 ROOT=/.root
 
 msg "Mounting pseudo filesystem..."
@@ -109,6 +106,7 @@ for param in $cmdline ; do
     initramfs   ) initramfs=1                     ;;
     verbose     ) verbose=1                       ;;
     live        ) live=1                          ;;
+    delay       ) delay=${param#delay=}           ;;
   esac
 done
 
@@ -147,6 +145,16 @@ if [ "$root" = "" ]; then
 	SYSTEM=/.system
 	mkdir -p $MEDIUM $SYSTEM
 	findmedia
+	if [ "$VENOMCD" = "" ]; then
+		msg "Media not found, will try again in $delay seconds..."
+		sleep $delay
+		findmedia
+		if [ "$VENOMCD" = "" ]; then
+			msg "Media still not found!"
+			msg "you've been dropped to shell."
+			problem
+		fi
+	fi
 	msg "Mounting root.sfs to $SYSTEM..."
 	mount -t squashfs -o ro,loop $MEDIUM/filesystem/root.sfs $SYSTEM || problem
 	

@@ -1,6 +1,7 @@
 #!/bin/bash -e
 # This file based in part on the mkinitramfs script for the LFS LiveCD
 # written by Alexander E. Patrakov and Jeremy Huntwork.
+# Adapted by Emmett1 to use with Venom Linux
 
 copy()
 {
