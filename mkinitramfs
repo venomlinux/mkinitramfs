@@ -128,6 +128,10 @@ if [ "$NOKMOD" = 1 ]; then
 fi
 
 if [ "$OUTPUT" ]; then
+	if [ $(basename $OUTPUT) != "$OUTPUT" ] && [ ! -d $(dirname $OUTPUT) ]; then
+		msgerr "directory '$(dirname $OUTPUT)' for output '$(basename $OUTPUT)' not exist"
+		exit 1
+	fi
 	INITRAMFS_FILE="$OUTPUT"
 fi
 
