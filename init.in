@@ -182,8 +182,9 @@ if [ "$root" = "" ]; then
 	fi
 
 	# Move mounted squashfs file to new root
-	mkdir -p $ROOT/mnt/.boot/$SYSTEM
-	mount --move $SYSTEM $ROOT/mnt/.boot/$SYSTEM
+	mkdir -p $ROOT/mnt/initramfs/$SYSTEM $ROOT/mnt/initramfs/$MEDIUM
+	mount --move $SYSTEM $ROOT/mnt/initramfs/$SYSTEM
+	mount --move $MEDIUM $ROOT/mnt/initramfs/$MEDIUM
 else
 	do_mount_root
 fi
