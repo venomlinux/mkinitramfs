@@ -141,8 +141,8 @@ fi
 if [ "$root" = "" ]; then
 	modprobe loop
 	modprobe squashfs
-	MEDIUM=/.medium
-	SYSTEM=/.system
+	MEDIUM=/medium
+	SYSTEM=/system
 	mkdir -p $MEDIUM $SYSTEM
 	findmedia
 	if [ "$VENOMCD" = "" ]; then
@@ -159,10 +159,10 @@ if [ "$root" = "" ]; then
 	mount -t squashfs -o ro,loop $MEDIUM/filesystem/root.sfs $SYSTEM || problem
 	
 	# overlayfs mount
-	WRITEDIR=/.venom/write
-	WORKDIR=/.venom/work
-	mkdir -p /.venom
-	mount -t tmpfs -o rw tmpfs /.venom
+	WRITEDIR=/venom/write
+	WORKDIR=/venom/work
+	mkdir -p /venom
+	mount -t tmpfs -o rw tmpfs /venom
 	mkdir -p $WRITEDIR $WORKDIR $ROOT
 
 	msg "Mounting overlays to $ROOT..."
@@ -182,9 +182,9 @@ if [ "$root" = "" ]; then
 	fi
 
 	# Move mounted squashfs file to new root
-	mkdir -p $ROOT/mnt/initramfs/$SYSTEM $ROOT/mnt/initramfs/$MEDIUM
-	mount --move $SYSTEM $ROOT/mnt/initramfs/$SYSTEM
-	mount --move $MEDIUM $ROOT/mnt/initramfs/$MEDIUM
+	mkdir -p $ROOT/lib/initramfs/{$SYSTEM,$MEDIUM}
+	mount --move $SYSTEM $ROOT/lib/initramfs/$SYSTEM
+	mount --move $MEDIUM $ROOT/lib/initramfs/$MEDIUM
 else
 	do_mount_root
 fi
