@@ -8,9 +8,9 @@ copy()
 	local file
 
 	if [ "$2" == "lib" ]; then
-		file=$(PATH=/lib:$ROOT/usr/lib type -p $1)
+		file=$(PATH=/lib:/usr/lib type -p $1)
 	else
-		file=$(PATH=/bin:$ROOT/usr/bin:$ROOT/sbin:$ROOT/usr/sbin type -p $1)
+		file=$(PATH=/bin:/usr/bin:/sbin:/usr/sbin type -p $1)
 	fi
 
 	if [ ! -z $file ] ; then
@@ -55,7 +55,6 @@ Options:
   -i|--init       <arg>  custom init file
   -f|--firmware          include firmware
   -n|--no-modules        exclude kernel modules
-  -m|--modules           include loaded modules only
   -h|--help              print this help msg
 	
 EOF
@@ -83,8 +82,6 @@ while [ $1 ]; do
 						fi
 						INIT=$2
 						shift 2 ;;
-		-m|--modules)	LOADEDMOD=1
-						shift ;;
 		-n|--no-modules) NOKMOD=1
 						shift ;;
 		-f|--firmware)	FIRMWARE=1
@@ -238,7 +235,7 @@ if [ -x /sbin/lvm ] ; then binaries="$binaries lvm dmsetup"; fi
 msg "copying binaries..."
 for i in $binaries; do
 	copy $i bin
-	ldd $(PATH=/bin:$ROOT/usr/bin:$ROOT/sbin:$ROOT/usr/sbin type -p $i) | sed "s/\t//" | cut -d " " -f1 >> $unsorted
+	ldd $(PATH=/bin:/usr/bin:/sbin:/usr/sbin type -p $i) | sed "s/\t//" | cut -d " " -f1 >> $unsorted
 done
 
 # Add module symlinks if appropriate
@@ -290,16 +287,14 @@ fi
 
 # Install the kernel modules if requested
 if [ "$NOKMOD" != 1 ]; then
-	if [ "$LOADEDMOD" = 1 ]; then
-		msg "copying loaded modules..."
-		for k in $(lsmod | awk '{print $1}'); do
-			find /lib/modules/$KERNEL_VERSION/kernel/ -name $k.ko* -type f | cpio --make-directories -p --quiet $WDIR
-		done
-	else
-		msg "copying all modules..."
-		find /lib/modules/$KERNEL_VERSION/kernel/ \
-		 -name *.ko* -type f 2> /dev/null | cpio --make-directories -p --quiet $WDIR
-	fi
+		msg "copying modules..."
+		find                                                                      \
+		 /lib/modules/$KERNEL_VERSION/kernel/{crypto,fs,lib}                      \
+		 /lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,md,firewire,input} \
+		 /lib/modules/$KERNEL_VERSION/kernel/drivers/{scsi,message,pcmcia,virtio} \
+		 /lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,usb/{host,storage}}     \
+		 -type f 2> /dev/null | cpio --make-directories -p --quiet $WDIR
+
 	cp /lib/modules/$KERNEL_VERSION/modules.{builtin,order} \
 			$WDIR/lib/modules/$KERNEL_VERSION
 
