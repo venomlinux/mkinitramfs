@@ -57,7 +57,7 @@ do_mount_root() {
 
 findmedia() {
 	msg "Finding media..."
-	for device in /dev/sd* /dev/sr* /dev/loop*; do
+	for device in /dev/sd* /dev/sr*; do
 		[ -b $device ] || continue
 		msg "Find in $device..."
 		mount -o ro $device $MEDIUM &>/dev/null && \
