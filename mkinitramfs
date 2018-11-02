@@ -25,10 +25,12 @@ copy()
 }
 
 msg() {
+	[ $QUIET ] && return
 	echo ":: $@"
 }
 
 msgerr() {
+	[ $QUIET ] && return
 	echo "ERROR: $@"
 }
 
@@ -55,6 +57,7 @@ Options:
   -i|--init       <arg>  custom init file
   -f|--firmware          include firmware
   -n|--no-modules        exclude kernel modules
+  -q|--quiet             quiet mode
   -h|--help              print this help msg
 	
 EOF
@@ -85,6 +88,8 @@ while [ $1 ]; do
 		-n|--no-modules) NOKMOD=1
 						shift ;;
 		-f|--firmware)	FIRMWARE=1
+						shift ;;
+		-q|--quiet)		QUIET=1
 						shift ;;
 		-h|--help)		usage
 						exit 0 ;;
@@ -143,7 +148,7 @@ if [ ! -f "$INITIN" ]; then
 	exit 1
 fi
 
-echo "Creating $INITRAMFS_FILE..."
+[ $QUIET ] || echo "Creating $INITRAMFS_FILE..."
 
 binaries="sh cat cp dd killall ls mkdir mknod mount find xargs grep fgrep"
 binaries="$binaries umount sed sleep ln rm uname chroot chmod"
@@ -321,6 +326,6 @@ rm -f $INITRAMFS_FILE
 
 # Remove the temporary directory and file
 cleanup
-echo "Done $OUTPUT"
+[ $QUIET ] || echo "Done $INITRAMFS_FILE"
 
 exit 0
