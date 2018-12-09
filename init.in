@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
 export PATH
@@ -168,8 +168,10 @@ if [ "$root" = "" ]; then
 	msg "Mounting overlays to $ROOT..."
 	mount -t overlay overlay -o upperdir=$WRITEDIR,lowerdir=$SYSTEM,workdir=$WORKDIR $ROOT || problem
 
-	msg "Copying custom files to $ROOT..."
-	cp -aR $MEDIUM/virootfs/* $ROOT/ || problem
+	if [ -d $MEDIUM/virootfs/ ]; then
+		msg "Copying custom files to $ROOT..."
+		cp -aR $MEDIUM/virootfs/* $ROOT/ || problem
+	fi
 
 	# Tell system to skip fsck during startup
 	> $ROOT/fastboot
