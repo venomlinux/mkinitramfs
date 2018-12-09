@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 BINDIR=/usr/bin
 DATADIR=/usr/share/mkinitramfs

@@ -150,7 +150,7 @@ fi
 
 [ $QUIET ] || echo "Creating $INITRAMFS_FILE..."
 
-binaries="sh cat cp dd killall ls mkdir mknod mount find xargs grep fgrep"
+binaries="bash sh cat cp dd killall ls mkdir mknod mount find xargs grep fgrep"
 binaries="$binaries umount sed sleep ln rm uname chroot chmod"
 binaries="$binaries readlink basename modprobe blkid switch_root"
 
