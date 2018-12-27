@@ -105,7 +105,6 @@ for param in $cmdline ; do
     rw          ) ro="rw"                         ;;
     initramfs   ) initramfs=1                     ;;
     verbose     ) verbose=1                       ;;
-    live        ) live=1                          ;;
     delay       ) delay=${param#delay=}           ;;
   esac
 done
@@ -131,6 +130,13 @@ if [ -f /etc/mdadm.conf ] ; then mdadm -As                       ; fi
 if [ -x /sbin/vgchange  ] ; then /sbin/vgchange -a y > /dev/null ; fi
 if [ -n "$rootdelay"    ] ; then sleep "$rootdelay"              ; fi
 
+for i in dm-mod md-mod ehci-pci overlay \
+	xhci-pci xhci-hcd ehci-hcd nls_iso8859_1 \
+	uhci-hcd uas sr_mod usb-storage loop \
+	squashfs isofs vfat fat nls_cp437; do
+	modprobe $i 2>/dev/null
+done
+	
 if [ "$initramfs" = 1 ]; then
 	msg "initramfs mode requested"
 	msg "you've been dropped to shell."
@@ -139,8 +145,6 @@ fi
 
 # if root not set means its livecd
 if [ "$root" = "" ]; then
-	modprobe loop
-	modprobe squashfs
 	MEDIUM=/medium
 	SYSTEM=/system
 	mkdir -p $MEDIUM $SYSTEM
