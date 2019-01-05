@@ -109,21 +109,11 @@ for param in $cmdline ; do
   esac
 done
 
-# udevd location depends on version
-if [ -x /sbin/udevd ]; then
-	UDEVD=/sbin/udevd
-elif [ -x /lib/udev/udevd ]; then
-	UDEVD=/lib/udev/udevd
-elif [ -x /lib/systemd/systemd-udevd ]; then
-	UDEVD=/lib/systemd/systemd-udevd
-else
-	msg "Cannot find udevd nor systemd-udevd"
-	problem
-fi
-
 msg "Starting eudev..."
-${UDEVD} --daemon --resolve-names=never
-udevadm trigger
+udevd --daemon --resolve-names=never
+udevadm trigger --action=add    --type=subsystems
+udevadm trigger --action=add    --type=devices
+udevadm trigger --action=change --type=devices
 udevadm settle
 
 if [ -f /etc/mdadm.conf ] ; then mdadm -As                       ; fi
@@ -196,7 +186,7 @@ else
 fi
 
 [ "$VENOMCD" ] && msg "Stopping eudev..."
-killall -w ${UDEVD##*/}
+killall -w udevd
 
 [ "$VENOMCD" ] && msg "Switching root to $ROOT..."
 exec switch_root $ROOT "$init" "$@"
