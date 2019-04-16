@@ -3,6 +3,29 @@
 # written by Alexander E. Patrakov and Jeremy Huntwork.
 # Adapted by Emmett1 to use with Venom Linux
 
+copy_modules() {
+	pushd /lib/modules/$KERNEL_VERSION/ >/dev/null
+		mod=$(find kernel -type f -name $1.ko*)
+	popd >/dev/null
+	if [ ! -n "$mod" ]; then
+		return
+	fi
+	cp -R --parent /lib/modules/$KERNEL_VERSION/$mod $WDIR
+	dep=$(cat /lib/modules/$KERNEL_VERSION/modules.dep | grep -E /$(basename $mod): | sed 's/.*://')
+	if [ -n "$dep" ]; then
+		for i in $dep; do
+			i=$(basename $i)
+			i=$(echo ${i%*.ko*})
+			copy_modules $i
+		done
+	fi
+	unset dep mod
+	shift
+	if [ "$1" ]; then
+		copy_modules $@
+	fi
+}
+
 copy()
 {
 	local file
@@ -15,8 +38,6 @@ copy()
 
 	if [ ! -z $file ] ; then
 		cp $file $WDIR/$2
-	elif [ "$SKIP" = 1 ]; then
-		echo "SKIP: $1"
 	else
 		echo "Missing required file: $1 for directory $2"
 		rm -rf $WDIR
@@ -52,50 +73,57 @@ Usage:
   $(basename $0) <option> <argument>
 
 Options:
-  -k|--kernver    <arg>  custom kernel version
-  -o|--output     <arg>  custom output name
-  -i|--init       <arg>  custom init file
-  -f|--firmware          include firmware
-  -n|--no-modules        exclude kernel modules
-  -q|--quiet             quiet mode
-  -h|--help              print this help msg
+  -k <version>  custom kernel version
+  -o <output>   custom output name
+  -i <init>     custom init file
+  -a            autodetect required modules
+  -f            include firmware
+  -n            exclude kernel modules
+  -q            quiet mode
+  -h            print this help msg
 	
 EOF
 }
 
 trap "interrupted" SIGHUP SIGINT SIGQUIT SIGTERM
 
+CONFIG="/etc/mkinitramfs.conf"
+
 while [ $1 ]; do
 	case $1 in
-		-k|--kernver)	if [ -z $2 ]; then
-							echo "argument is needed for this option"
-							exit 1
-						fi
-						KERNEL=$2
-						shift 2 ;;
-		-o|--output)	if [ -z $2 ]; then
-							echo "argument is needed for this option"
-							exit 1
-						fi
-						OUTPUT=$2
-						shift 2 ;;
-		-i|--init)		if [ -z $2 ]; then
-							echo "argument is needed for this option"
-							exit 1
-						fi
-						INIT=$2
-						shift 2 ;;
-		-n|--no-modules) NOKMOD=1
-						shift ;;
-		-f|--firmware)	FIRMWARE=1
-						shift ;;
-		-q|--quiet)		QUIET=1
-						shift ;;
-		-h|--help)		usage
-						exit 0 ;;
-		*)				echo "ERROR: invalid option '$1'"
-						exit 1 ;;
+		-k)	if [ -z $2 ]; then
+				echo "argument is needed for this option"
+				exit 1
+			fi
+			KERNEL=$2
+			shift 1 ;;
+		-o)	if [ -z $2 ]; then
+				echo "argument is needed for this option"
+				exit 1
+			fi
+			OUTPUT=$2
+			shift 1 ;;
+		-i)	if [ -z $2 ]; then
+				echo "argument is needed for this option"
+				exit 1
+			fi
+			INIT=$2
+			shift 1 ;;
+		-c)	if [ -z $2 ]; then
+				echo "argument is needed for this option"
+				exit 1
+			fi
+			CONFIG=$2
+			shift 1 ;;
+		-a) AUTOMOD=1 ;;
+		-n) NOKMOD=1 ;;
+		-f)	FIRMWARE=1 ;;
+		-q)	QUIET=1 ;;
+		-h)	usage; exit 0 ;;
+		*)	echo "ERROR: invalid option '$1'"
+			exit 1 ;;
 	esac
+	shift
 done
 
 if [ "$UID" != "0" ]; then
@@ -148,19 +176,22 @@ if [ ! -f "$INITIN" ]; then
 	exit 1
 fi
 
+if [ -f "$CONFIG" ]; then
+	. "$CONFIG"
+else
+	msgerr "Config file '$CONFIG' not found"
+fi
+
 [ $QUIET ] || echo "Creating $INITRAMFS_FILE..."
 
 binaries="bash sh cat cp dd killall ls mkdir mknod mount find xargs grep fgrep"
 binaries="$binaries umount sed sleep ln rm uname chroot chmod"
 binaries="$binaries readlink basename modprobe blkid switch_root"
+binaries="$binaries udevd udevadm" # udev
 
-# Systemd installs udevadm in /bin. Other udev implementations have it in /sbin
-if [ -x /bin/udevadm ] ; then binaries="$binaries udevadm"; fi
-
-# Optional files and locations
-for f in mdadm mdmon udevd udevadm; do
-	if [ -x /sbin/$f ] ; then binaries="$binaries $f"; fi
-done
+if [ "${#BINARIES[@]}" -gt 0 ]; then
+	binaries="$binaries ${BINARIES[@]}"
+fi
 
 unsorted=$(mktemp /tmp/unsorted.XXXXXXXXXX)
 
@@ -186,11 +217,11 @@ mknod -m 664 $WDIR/dev/null    c 1 3
 # Install the udev configuration files
 msg "copying udev configuration..."
 if [ -f /etc/udev/udev.conf ]; then
-	cp /etc/udev/udev.conf $WDIR/etc/udev/udev.conf
+	cp --parent /etc/udev/udev.conf $WDIR
 fi
 
 for file in $(find /etc/udev/rules.d/ -type f) ; do
-	cp $file $WDIR/etc/udev/rules.d
+	cp --parent $file $WDIR
 done
 
 if [ -d /lib/udev ]; then
@@ -198,27 +229,11 @@ if [ -d /lib/udev ]; then
 fi
 # remove unneeded udev rules
 rm -f $WDIR/lib/udev/rules.d/60-vboxdrv.rules $WDIR/lib/udev/rules.d/69-xorg-vmmouse.rules
-if [ -d /lib/systemd ]; then
-	cp -a /lib/systemd $WDIR/lib
-fi
-
-# Add udevd libraries if not in /sbin
-if [ -x /lib/udev/udevd ] ; then
-	ldd /lib/udev/udevd | sed "s/\t//" | cut -d " " -f1 >> $unsorted
-elif [ -x /lib/systemd/systemd-udevd ] ; then
-	ldd /lib/systemd/systemd-udevd | sed "s/\t//" | cut -d " " -f1 >> $unsorted
-fi
 
 # Install firmware
 if [ "$FIRMWARE" = 1 ]; then
 	msg "copying firmware..."
-	cp -a /lib/firmware $WDIR/lib
-fi
-
-# Copy the RAID configuration file if present
-if [ -f /etc/mdadm.conf ] ; then
-	msg "copying raid configuration..."
-	cp /etc/mdadm.conf $WDIR/etc
+	cp -Ra --parent /lib/firmware $WDIR
 fi
 
 # Install the init file
@@ -234,9 +249,6 @@ if [ "$NOKMOD" != 1 ]; then
 	fi
 fi
 
-# Add lvm if present
-if [ -x /sbin/lvm ] ; then binaries="$binaries lvm dmsetup"; fi
-
 msg "copying binaries..."
 for i in $binaries; do
 	copy $i bin
@@ -244,34 +256,9 @@ for i in $binaries; do
 done
 
 # Add module symlinks if appropriate
-if [ -n "$KERNEL_VERSION" ] && [ -x /bin/kmod ] ; then
+if [ -n "$KERNEL_VERSION" ] && [ -x $WDIR/bin/kmod ] ; then
 	ln -s kmod $WDIR/bin/lsmod
 	ln -s kmod $WDIR/bin/insmod
-fi
-
-# Add lvm symlinks if appropriate
-# Also copy the lvm.conf file
-if  [ -x /sbin/lvm ] ; then
-	ln -s lvm $WDIR/sbin/lvchange
-	ln -s lvm $WDIR/sbin/lvrename
-	ln -s lvm $WDIR/sbin/lvextend
-	ln -s lvm $WDIR/sbin/lvcreate
-	ln -s lvm $WDIR/sbin/lvdisplay
-	ln -s lvm $WDIR/sbin/lvscan
-
-	ln -s lvm $WDIR/sbin/pvchange
-	ln -s lvm $WDIR/sbin/pvck
-	ln -s lvm $WDIR/sbin/pvcreate
-	ln -s lvm $WDIR/sbin/pvdisplay
-	ln -s lvm $WDIR/sbin/pvscan
-
-	ln -s lvm $WDIR/sbin/vgchange
-	ln -s lvm $WDIR/sbin/vgcreate
-	ln -s lvm $WDIR/sbin/vgscan
-	ln -s lvm $WDIR/sbin/vgrename
-	ln -s lvm $WDIR/sbin/vgck
-	# Conf file(s)
-	cp -a /etc/lvm $WDIR/etc
 fi
 
 # Install libraries
@@ -284,37 +271,48 @@ sort $unsorted | uniq | grep -v ^not$ | while read library ; do
 done
 
 # copy terminfo
-if [ -d /usr/share/terminfo ]; then
-	msg "copying terminfo..."
-	mkdir -p $WDIR/usr/share
-	cp -r /usr/share/terminfo $WDIR/usr/share/
+if [ -f /usr/share/terminfo/l/linux ]; then
+	msg "copying linux terminfo..."
+	cp --parent /usr/share/terminfo/l/linux $WDIR
 fi
 
-msg "copying required modules..."
-# required modules
-for i in dm-mod md-mod ehci-pci \
-xhci-pci xhci-hcd vfat fat nls_cp437 \
-ehci-hcd uhci-hcd uas nls_iso8859-1 \
-usbcore usb-common usb-storage loop sr_mod \
-cdrom squashfs isofs overlay mmc_core \
-rtsx_pci rtsx_pci_sdmmc rtsx_pci_ms mmc_block \
-ssb lpc_ich shpcp sdhci-acpi sdhci-pltfm \
-sdhci sdhci-pci; do
-	find /lib/modules/$KERNEL_VERSION/kernel -type f -name $i* 2>/dev/null | \
-	cpio --make-directories -p --quiet $WDIR 2> /dev/null
-done
+# copy requested files
+if [ "${#FILES[@]}" -gt 0 ]; then
+	for f in ${FILES[@]}; do
+		if [ -e $f ]; then
+			cp --parent $f $WDIR
+		fi
+	done
+fi
+
+# extra modules for livecd
+extra_modules="cdrom mmc_core rtsx_pci rtsx_pci_sdmmc rtsx_pci_ms mmc_block ssb lpc_ich sdhci-acpi sdhci-pltfm sdhci sdhci-pci "
 
 # Install the kernel modules if requested
 if [ "$NOKMOD" != 1 ]; then
+	if [ "$AUTOMOD" = 1 ]; then
+		msg "copying automod modules..."
+		for i in $(lsmod | awk 'NF==3{print $1}{}'); do
+			copy_modules $i
+		done
+	else
 		msg "copying modules..."
-		find                                                                      \
-		 /lib/modules/$KERNEL_VERSION/kernel/{crypto,fs,lib}                      \
-		 /lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,md,firewire,input} \
-		 /lib/modules/$KERNEL_VERSION/kernel/drivers/{scsi,message,pcmcia,virtio} \
-		 /lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,usb/{host,storage}}     \
-		 -type f 2> /dev/null | cpio --make-directories -p --quiet $WDIR 2>/dev/null
+		for modules in $(find /lib/modules/$KERNEL_VERSION/kernel/{crypto,fs} \
+			/lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,input,scsi} \
+			/lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,usb/{host,storage}} \
+			-type f 2> /dev/null); do
+			modules=$(basename $modules)
+			modules=$(echo ${modules%*.ko*})
+			copy_modules $(basename $modules)
+		done
+		copy_modules $extra_modules
+	fi
+	
+	if [ "${#MODULES[@]}" -gt 0 ]; then
+		copy_modules ${MODULES[@]}
+	fi
 
-	cp /lib/modules/$KERNEL_VERSION/modules.{builtin,order} \
+	cp /lib/modules/$KERNEL_VERSION/modules.* \
 			$WDIR/lib/modules/$KERNEL_VERSION
 
 	depmod -b $WDIR $KERNEL_VERSION
