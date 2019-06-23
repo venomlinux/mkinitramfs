@@ -320,30 +320,30 @@ CONFIG="/etc/mkinitramfs.conf"
 REQFILES="/usr/share/terminfo/l/linux"
 
 UDEV_FILES="/etc/udev/udev.conf
-			$(find /etc/udev/rules.d/ -type f)
-			$(find /lib/udev/ -type f)"
+            $(find /etc/udev/rules.d/ -type f)
+            $(find /lib/udev/ -type f)"
 			
 UDEV_FILES_MIN="/etc/udev/udev.conf
-				/lib/udev/ata_id
-				/lib/udev/cdrom_id
-				/lib/udev/collect
-				/lib/udev/mtd_probe
-				/lib/udev/scsi_id
-				/lib/udev/rules.d/50-udev-default.rules
-				/lib/udev/rules.d/60-block.rules
-				/lib/udev/rules.d/60-cdrom_id.rules
-				/lib/udev/rules.d/60-drm.rules
-				/lib/udev/rules.d/60-evdev.rules
-				/lib/udev/rules.d/60-input-id.rules
-				/lib/udev/rules.d/60-persistent-input.rules
-				/lib/udev/rules.d/60-persistent-storage.rules
-				/lib/udev/rules.d/60-persistent-storage-tape.rules
-				/lib/udev/rules.d/60-serial.rules
-				/lib/udev/rules.d/64-btrfs.rules
-				/lib/udev/rules.d/75-net-description.rules
-				/lib/udev/rules.d/75-probe_mtd.rules
-				/lib/udev/rules.d/80-drivers.rules
-				/lib/udev/rules.d/80-net-name-slot.rules
-				/lib/udev/rules.d/96-e2scrub.rules"
+                /lib/udev/ata_id
+                /lib/udev/cdrom_id
+                /lib/udev/collect
+                /lib/udev/mtd_probe
+                /lib/udev/scsi_id
+                /lib/udev/rules.d/50-udev-default.rules
+                /lib/udev/rules.d/60-block.rules
+                /lib/udev/rules.d/60-cdrom_id.rules
+                /lib/udev/rules.d/60-drm.rules
+                /lib/udev/rules.d/60-evdev.rules
+                /lib/udev/rules.d/60-input-id.rules
+                /lib/udev/rules.d/60-persistent-input.rules
+                /lib/udev/rules.d/60-persistent-storage.rules
+                /lib/udev/rules.d/60-persistent-storage-tape.rules
+                /lib/udev/rules.d/60-serial.rules
+                /lib/udev/rules.d/64-btrfs.rules
+                /lib/udev/rules.d/75-net-description.rules
+                /lib/udev/rules.d/75-probe_mtd.rules
+                /lib/udev/rules.d/80-drivers.rules
+                /lib/udev/rules.d/80-net-name-slot.rules
+                /lib/udev/rules.d/96-e2scrub.rules"
 
 main $@
