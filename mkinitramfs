@@ -237,7 +237,7 @@ main() {
 	make_dirs
 
 	msg "copying init file..."
-	install -m0755 $INITIN $WDIR
+	install -m0755 $INITIN $WDIR/init
 
 	msg "copying binaries and libraries..."
 	if [ "$MINIMAL" = 1 ]; then
