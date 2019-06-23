@@ -31,13 +31,14 @@ copy_bins() {
 }
 
 copy_modules() {
-	pushd /lib/modules/$KERNEL_VERSION/ >/dev/null
-		mod=$(find kernel -type f -name $1.ko*)
+	pushd /lib/modules/ >/dev/null
+		mod=$(find $KERNEL_VERSION -type f -name $1.ko*)
 	popd >/dev/null
 	if [ ! -n "$mod" ]; then
 		return
 	fi
-	cp -R --parent /lib/modules/$KERNEL_VERSION/$mod $WDIR
+	mod=$(echo $mod | awk '{print $1}')
+	cp -R --parent /lib/modules/$mod $WDIR
 	dep=$(cat /lib/modules/$KERNEL_VERSION/modules.dep | grep -E /$(basename $mod): | sed 's/.*://')
 	if [ -n "$dep" ]; then
 		for i in $dep; do
@@ -246,14 +247,12 @@ main() {
 		copy_bins $HUGEBIN
 	fi
 	
-	msg "copying required files..."
-	copy_files $REQFILES
-	if [ "$MINIMAL" = 1 ]; then
-		copy_files $UDEV_FILES_MIN
-	else
-		copy_files $UDEV_FILES
-	fi
-
+	msg "copying terminfo..."
+	copy_files /usr/share/terminfo/l/linux
+	
+	msg "copying udev stuff..."
+	copy_files $UDEV_FILES
+	
 	if [ "$NOKMOD" != 1 ]; then
 		if [ "$MINIMAL" = 1 ]; then
 			msg "copying autodetect modules..."
@@ -316,34 +315,27 @@ KERNEL_VERSION="$(uname -r)"
 INITIN="/usr/share/mkinitramfs/init.in"
 INITRAMFS="initrd-$KERNEL_VERSION.img"
 CONFIG="/etc/mkinitramfs.conf"
-
-REQFILES="/usr/share/terminfo/l/linux"
-
 UDEV_FILES="/etc/udev/udev.conf
-            $(find /etc/udev/rules.d/ -type f)
-            $(find /lib/udev/ -type f)"
-			
-UDEV_FILES_MIN="/etc/udev/udev.conf
-                /lib/udev/ata_id
-                /lib/udev/cdrom_id
-                /lib/udev/collect
-                /lib/udev/mtd_probe
-                /lib/udev/scsi_id
-                /lib/udev/rules.d/50-udev-default.rules
-                /lib/udev/rules.d/60-block.rules
-                /lib/udev/rules.d/60-cdrom_id.rules
-                /lib/udev/rules.d/60-drm.rules
-                /lib/udev/rules.d/60-evdev.rules
-                /lib/udev/rules.d/60-input-id.rules
-                /lib/udev/rules.d/60-persistent-input.rules
-                /lib/udev/rules.d/60-persistent-storage.rules
-                /lib/udev/rules.d/60-persistent-storage-tape.rules
-                /lib/udev/rules.d/60-serial.rules
-                /lib/udev/rules.d/64-btrfs.rules
-                /lib/udev/rules.d/75-net-description.rules
-                /lib/udev/rules.d/75-probe_mtd.rules
-                /lib/udev/rules.d/80-drivers.rules
-                /lib/udev/rules.d/80-net-name-slot.rules
-                /lib/udev/rules.d/96-e2scrub.rules"
+            /lib/udev/ata_id
+            /lib/udev/cdrom_id
+            /lib/udev/collect
+            /lib/udev/mtd_probe
+            /lib/udev/scsi_id
+            /lib/udev/rules.d/50-udev-default.rules
+            /lib/udev/rules.d/60-block.rules
+            /lib/udev/rules.d/60-cdrom_id.rules
+            /lib/udev/rules.d/60-drm.rules
+            /lib/udev/rules.d/60-evdev.rules
+            /lib/udev/rules.d/60-input-id.rules
+            /lib/udev/rules.d/60-persistent-input.rules
+            /lib/udev/rules.d/60-persistent-storage.rules
+            /lib/udev/rules.d/60-persistent-storage-tape.rules
+            /lib/udev/rules.d/60-serial.rules
+            /lib/udev/rules.d/64-btrfs.rules
+            /lib/udev/rules.d/75-net-description.rules
+            /lib/udev/rules.d/75-probe_mtd.rules
+            /lib/udev/rules.d/80-drivers.rules
+            /lib/udev/rules.d/80-net-name-slot.rules
+            /lib/udev/rules.d/96-e2scrub.rules"
 
 main $@
