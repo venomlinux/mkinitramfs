@@ -3,67 +3,32 @@
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
 export PATH
 
-msg() {
-	[ "$verbose" = 1  ] || return
-	echo ":: $@"
+shell() {
+	setsid sh -c 'exec sh </dev/tty1 >/dev/tty1 2>&1'
 }
 
 problem() {
-   echo "Encountered a problem!"
-   echo "Dropping you to a shell."
-   sh
+	echo
+	echo "problem occurs, here's a shell."
+	echo
+	shell
 }
 
-no_device() {
-   echo "The device $1, which is supposed to contain the"
-   echo "root file system, does not exist."
-   echo "Please fix this problem and exit this shell."
-}
-
-no_mount() {
-   echo "Could not mount device $1"
-   echo "Sleeping forever. Please reboot and fix the kernel command line."
-   echo
-   echo "Maybe the device is formatted with an unsupported file system?"
-   echo "Or maybe filesystem type autodetection went wrong, in which case"
-   echo "you should add the rootfstype=... parameter to the kernel command line."
-   echo
-   echo "Available partitions:"
-}
-
-do_mount_root() {
-   mkdir /.root
-   [ -n "$rootflags" ] && rootflags="$rootflags,"
-   rootflags="$rootflags$ro"
-
-   case "$root" in
-      /dev/* ) device=$root ;;
-      UUID=* ) eval $root; device="/dev/disk/by-uuid/$UUID"  ;;
-      LABEL=*) eval $root; device="/dev/disk/by-label/$LABEL" ;;
-      ""     ) echo "No root device specified." ; problem    ;;
-   esac
-
-   while [ ! -b "$device" ] ; do
-       no_device $device
-       problem
-   done
-
-   if ! mount -n -t "$rootfstype" -o "$rootflags" "$device" /.root ; then
-       no_mount $device
-       cat /proc/partitions
-       while true ; do sleep 10000 ; done
-   fi
+msg() {
+	[ "$verbose" = 1  ] || return
+	echo ":: $*"
 }
 
 findmedia() {
-	msg "Finding media..."
+	local device
+	msg "finding media..."
 	for device in /dev/sd* /dev/sr*; do
 		[ -b $device ] || continue
-		msg "Find in $device..."
+		msg "find in $device..."
 		mount -o ro $device $MEDIUM &>/dev/null && \
 		if [ -f $MEDIUM/isolinux/venomlive ]; then
-			msg "Media found: $device"
-			VENOMCD=$device
+			msg "media found: $device"
+			MEDIA=$device
 			break
 		else
 			umount $MEDIUM
@@ -71,7 +36,88 @@ findmedia() {
 	done
 }
 
-msg "Starting initrd..."
+mount_root() {
+	mkdir -p $ROOT
+	
+	[ -n "$rootflags" ] && rootflags="$rootflags,"
+	rootflags="$rootflags$ro"
+
+	case "$root" in
+		/dev/* ) device=$root ;;
+		UUID=* ) eval $root; device="/dev/disk/by-uuid/$UUID"  ;;
+		LABEL=*) eval $root; device="/dev/disk/by-label/$LABEL" ;;
+		""     ) echo "No root device specified." ; sh    ;;
+	esac
+
+	while [ ! -b "$device" ] ; do
+		echo "no device: $device"
+		shell
+	done
+
+	if ! mount -n -t "$rootfstype" -o "$rootflags" "$device" "$ROOT" ; then
+		echo "cant mount: $device"
+		shell
+	fi
+}
+
+mount_live() {
+	MEDIUM=/medium
+	SYSTEM=/system
+	mkdir -p $MEDIUM $SYSTEM
+	findmedia
+	if [ "$MEDIA" = "" ]; then
+		msg "Media not found, will try again in $delay seconds..."
+		sleep $delay
+		findmedia
+		if [ "$MEDIA" = "" ]; then
+			msg "media still not found!"
+			msg "you've been dropped to a shell."
+			shell
+		fi
+	fi
+	msg "mounting root.sfs to $SYSTEM..."
+	mount -t squashfs -o ro,loop $MEDIUM/filesystem/root.sfs $SYSTEM || problem
+	
+	# overlayfs mount
+	WRITEDIR=/venom/write
+	WORKDIR=/venom/work
+	mkdir -p /venom
+	mount -t tmpfs -o rw tmpfs /venom
+	mkdir -p $WRITEDIR $WORKDIR $ROOT
+
+	msg "mounting overlays to $ROOT..."
+	mount -t overlay overlay -o upperdir=$WRITEDIR,lowerdir=$SYSTEM,workdir=$WORKDIR $ROOT || problem
+
+	if [ -d $MEDIUM/virootfs/ ]; then
+		msg "mopying custom files to $ROOT..."
+		cp -aR $MEDIUM/virootfs/* $ROOT/ || problem
+	fi
+
+	# Tell system to skip fsck during startup
+	> $ROOT/fastboot
+
+	# Execute custom script before switch root
+	if [ -f $ROOT/root/custom_script.sh ]; then
+		msg "running 'custom_script.sh' script..."
+		chmod +x $ROOT/root/custom_script.sh
+		chroot $ROOT bash /root/custom_script.sh 2>/dev/null
+	fi
+
+	# Move mounted squashfs file to new root
+	mkdir -p $ROOT/lib/initramfs/{$SYSTEM,$MEDIUM}
+	mount --move $SYSTEM $ROOT/lib/initramfs/$SYSTEM
+	mount --move $MEDIUM $ROOT/lib/initramfs/$MEDIUM
+}
+
+load_livecd_modules() {
+	local mod
+	for mod in dm-mod md-mod ehci-pci overlay \
+		xhci-pci xhci-hcd ehci-hcd nls_iso8859_1 \
+		uhci-hcd uas sr_mod usb-storage loop \
+		squashfs isofs vfat fat nls_cp437; do
+		modprobe $mod 2>/dev/null
+	done
+}
 
 init=/sbin/init
 root=
@@ -82,11 +128,9 @@ rootflags=
 device=
 initramfs=
 verbose=
-live=
 delay=5
-ROOT=/.root
+ROOT=/newroot
 
-msg "Mounting pseudo filesystem..."
 mount -n -t devtmpfs devtmpfs /dev
 mount -n -t proc     proc     /proc
 mount -n -t sysfs    sysfs    /sys
@@ -95,101 +139,43 @@ mount -n -t tmpfs    tmpfs    /run
 read -r cmdline < /proc/cmdline
 
 for param in $cmdline ; do
-  case $param in
-    init=*      ) init=${param#init=}             ;;
-    root=*      ) root=${param#root=}             ;;
-    rootdelay=* ) rootdelay=${param#rootdelay=}   ;;
-    rootfstype=*) rootfstype=${param#rootfstype=} ;;
-    rootflags=* ) rootflags=${param#rootflags=}   ;;
-    ro          ) ro="ro"                         ;;
-    rw          ) ro="rw"                         ;;
-    initramfs   ) initramfs=1                     ;;
-    verbose     ) verbose=1                       ;;
-    delay       ) delay=${param#delay=}           ;;
-  esac
+	case $param in
+		init=*      ) init=${param#init=}             ;;
+		root=*      ) root=${param#root=}             ;;
+		rootdelay=* ) rootdelay=${param#rootdelay=}   ;;
+		rootfstype=*) rootfstype=${param#rootfstype=} ;;
+		rootflags=* ) rootflags=${param#rootflags=}   ;;
+		ro          ) ro="ro"                         ;;
+		rw          ) ro="rw"                         ;;
+		initramfs   ) initramfs=1                     ;;
+		verbose     ) verbose=1                       ;;
+		delay       ) delay=${param#delay=}           ;;
+	esac
 done
 
-msg "Starting eudev..."
 udevd --daemon --resolve-names=never
 udevadm trigger --action=add    --type=subsystems
 udevadm trigger --action=add    --type=devices
 udevadm trigger --action=change --type=devices
 udevadm settle
 
-if [ -f /etc/mdadm.conf ] ; then mdadm -As                       ; fi
-if [ -x /sbin/vgchange  ] ; then /sbin/vgchange -a y > /dev/null ; fi
-if [ -n "$rootdelay"    ] ; then sleep "$rootdelay"              ; fi
-
-for i in dm-mod md-mod ehci-pci overlay \
-	xhci-pci xhci-hcd ehci-hcd nls_iso8859_1 \
-	uhci-hcd uas sr_mod usb-storage loop \
-	squashfs isofs vfat fat nls_cp437; do
-	modprobe $i 2>/dev/null
-done
-	
 if [ "$initramfs" = 1 ]; then
-	msg "initramfs mode requested"
-	msg "you've been dropped to shell."
-	sh
+	shell
 fi
 
-# if root not set means its livecd
 if [ "$root" = "" ]; then
-	MEDIUM=/medium
-	SYSTEM=/system
-	mkdir -p $MEDIUM $SYSTEM
-	findmedia
-	if [ "$VENOMCD" = "" ]; then
-		msg "Media not found, will try again in $delay seconds..."
-		sleep $delay
-		findmedia
-		if [ "$VENOMCD" = "" ]; then
-			msg "Media still not found!"
-			msg "you've been dropped to shell."
-			problem
-		fi
-	fi
-	msg "Mounting root.sfs to $SYSTEM..."
-	mount -t squashfs -o ro,loop $MEDIUM/filesystem/root.sfs $SYSTEM || problem
-	
-	# overlayfs mount
-	WRITEDIR=/venom/write
-	WORKDIR=/venom/work
-	mkdir -p /venom
-	mount -t tmpfs -o rw tmpfs /venom
-	mkdir -p $WRITEDIR $WORKDIR $ROOT
-
-	msg "Mounting overlays to $ROOT..."
-	mount -t overlay overlay -o upperdir=$WRITEDIR,lowerdir=$SYSTEM,workdir=$WORKDIR $ROOT || problem
-
-	if [ -d $MEDIUM/virootfs/ ]; then
-		msg "Copying custom files to $ROOT..."
-		cp -aR $MEDIUM/virootfs/* $ROOT/ || problem
-	fi
-
-	# Tell system to skip fsck during startup
-	> $ROOT/fastboot
-
-	# Execute custom script before switch root
-	if [ -f $ROOT/root/custom_script.sh ]; then
-		msg "Running 'custom_script.sh' script..."
-		chmod +x $ROOT/root/custom_script.sh
-		chroot $ROOT bash /root/custom_script.sh 2>/dev/null
-	fi
-
-	# Move mounted squashfs file to new root
-	mkdir -p $ROOT/lib/initramfs/{$SYSTEM,$MEDIUM}
-	mount --move $SYSTEM $ROOT/lib/initramfs/$SYSTEM
-	mount --move $MEDIUM $ROOT/lib/initramfs/$MEDIUM
+	load_livecd_modules
+	mount_live
 else
-	do_mount_root
+	mount_root
 fi
 
-[ "$VENOMCD" ] && msg "Stopping eudev..."
 killall -w udevd
 
-[ "$VENOMCD" ] && msg "Switching root to $ROOT..."
-exec switch_root $ROOT "$init" "$@"
+mount --move /proc $ROOT/proc
+mount --move /sys $ROOT/sys
+mount --move /dev $ROOT/dev
 
-msg "You should not be here, here's the shell, go fix it!"
-sh
+exec switch_root "$ROOT" "$init" "$@"
+
+problem

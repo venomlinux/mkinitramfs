@@ -1,7 +1,34 @@
-#!/bin/bash -e
-# This file based in part on the mkinitramfs script for the LFS LiveCD
-# written by Alexander E. Patrakov and Jeremy Huntwork.
-# Adapted by Emmett1 to use with Venom Linux
+#!/bin/bash
+
+PATH=/bin:/usr/bin:/sbin:/usr/sbin
+
+copy_bins() {
+	binpath=$(type -p $1)
+	binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f1)
+	
+	if [ -L $binpath ]; then
+		cp -n $(type -p $(basename $(readlink $binpath))) $WDIR/bin
+		ln -s $(basename $(readlink $binpath)) $WDIR/bin/$1
+	else
+		cp -n $binpath $WDIR/bin		
+	fi
+	
+	for lib in $binlib; do
+		case $lib in
+			linux-vdso.so.1|linux-gate.so.1) continue ;;
+		esac
+		lib=$(PATH=/lib:/lib64:/usr/lib:/usr/lib64 type -p $lib)
+		if [ "$lib" ] && [ ! -e $WDIR/lib/$(basename $lib) ]; then
+			cp -n $lib $WDIR/lib
+		fi
+		unset lib
+	done
+	unset binpath binlib
+	shift
+	if [ "$1" ]; then
+		copy_bins $@
+	fi
+}
 
 copy_modules() {
 	pushd /lib/modules/$KERNEL_VERSION/ >/dev/null
@@ -26,23 +53,27 @@ copy_modules() {
 	fi
 }
 
-copy()
-{
-	local file
-
-	if [ "$2" == "lib" ]; then
-		file=$(PATH=/lib:/usr/lib type -p $1)
-	else
-		file=$(PATH=/bin:/usr/bin:/sbin:/usr/sbin type -p $1)
+copy_files() {
+	if [ "$1" ] && [ -f "$1" ]; then
+		cp --parent $1 $WDIR
 	fi
+	shift
+	if [ "$1" ]; then
+		copy_files $@
+	fi
+}
 
-	if [ ! -z $file ] ; then
-		cp $file $WDIR/$2
-	else
-		echo "Missing required file: $1 for directory $2"
-		rm -rf $WDIR
-    exit 1
-  fi
+make_dirs() {
+	mkdir -p $WDIR/{bin,dev,lib/firmware,run,sys,proc,usr}
+	mkdir -p $WDIR/etc/{modprobe.d,udev/rules.d}
+	touch $WDIR/etc/modprobe.d/modprobe.conf
+	ln -s lib $WDIR/lib64
+	ln -s ../bin $WDIR/usr/bin
+	ln -s bin $WDIR/sbin
+	ln -s ../bin $WDIR/usr/sbin
+
+	mknod -m 640 $WDIR/dev/console c 5 1
+	mknod -m 664 $WDIR/dev/null    c 1 3
 }
 
 msg() {
@@ -55,28 +86,25 @@ msgerr() {
 	echo "ERROR: $@"
 }
 
+cleanup() {
+	rm -fr $WDIR
+}
+
 interrupted() {
 	cleanup
-	echo
-	msgerr "Aborted by user!"
 	exit 1
 }
 
-cleanup() {
-	rm -fr $WDIR $unsorted
-}
-
-usage() {
-	
+usage() {	
 	cat << EOF
 Usage:
   $(basename $0) <option> <argument>
-
+  
 Options:
   -k <version>  custom kernel version
   -o <output>   custom output name
   -i <init>     custom init file
-  -a            autodetect required modules
+  -m            create minimal initramfs
   -f            include firmware
   -n            exclude kernel modules
   -q            quiet mode
@@ -85,245 +113,237 @@ Options:
 EOF
 }
 
-trap "interrupted" SIGHUP SIGINT SIGQUIT SIGTERM
-
-CONFIG="/etc/mkinitramfs.conf"
-
-while [ $1 ]; do
-	case $1 in
-		-k)	if [ -z $2 ]; then
-				echo "argument is needed for this option"
-				exit 1
-			fi
-			KERNEL=$2
-			shift 1 ;;
-		-o)	if [ -z $2 ]; then
-				echo "argument is needed for this option"
-				exit 1
-			fi
-			OUTPUT=$2
-			shift 1 ;;
-		-i)	if [ -z $2 ]; then
-				echo "argument is needed for this option"
-				exit 1
-			fi
-			INIT=$2
-			shift 1 ;;
-		-c)	if [ -z $2 ]; then
-				echo "argument is needed for this option"
-				exit 1
-			fi
-			CONFIG=$2
-			shift 1 ;;
-		-a) AUTOMOD=1 ;;
-		-n) NOKMOD=1 ;;
-		-f)	FIRMWARE=1 ;;
-		-q)	QUIET=1 ;;
-		-h)	usage; exit 0 ;;
-		*)	echo "ERROR: invalid option '$1'"
-			exit 1 ;;
-	esac
-	shift
-done
-
-if [ "$UID" != "0" ]; then
-	msgerr "need root access!"
-	exit 1
-fi
-
-if [ ! -d  ]; then
-	msgerr "directory  does not exist!"
-	exit 1
-fi
-
-if [ "$KERNEL" ]; then
-	if [ -d /lib/modules/"$KERNEL" ]; then
-		KERNEL_VERSION="$KERNEL"
-	else
-		msgerr "kernel directory '/lib/modules/$KERNEL' not exist"
-		exit 1
-	fi
-else
-	if [ -d /lib/modules/$(uname -r) ]; then
-		KERNEL_VERSION=$(uname -r)
-	else
-		NOKMOD=1
-	fi
-fi
-
-INITRAMFS_FILE=initrd-$KERNEL_VERSION.img
-
-if [ "$NOKMOD" = 1 ]; then
-	INITRAMFS_FILE=initrd-no-kmod.img
-fi
-
-if [ "$OUTPUT" ]; then
-	if [ $(basename $OUTPUT) != "$OUTPUT" ] && [ ! -d $(dirname $OUTPUT) ]; then
-		msgerr "directory '$(dirname $OUTPUT)' for output '$(basename $OUTPUT)' not exist"
-		exit 1
-	fi
-	INITRAMFS_FILE="$OUTPUT"
-fi
-
-if [ "$INIT" ]; then
-	INITIN="$INIT"
-else
-	INITIN="/usr/share/mkinitramfs/init.in"
-fi
-
-if [ ! -f "$INITIN" ]; then
-	msgerr "file init '$INITIN' not exist"
-	exit 1
-fi
-
-if [ -f "$CONFIG" ]; then
-	. "$CONFIG"
-else
-	msgerr "Config file '$CONFIG' not found"
-fi
-
-[ $QUIET ] || echo "Creating $INITRAMFS_FILE..."
-
-binaries="bash sh cat cp dd killall ls mkdir mknod mount find xargs grep fgrep"
-binaries="$binaries umount sed sleep ln rm uname chroot chmod"
-binaries="$binaries readlink basename modprobe blkid switch_root"
-binaries="$binaries udevd udevadm" # udev
-
-if [ "${#BINARIES[@]}" -gt 0 ]; then
-	binaries="$binaries ${BINARIES[@]}"
-fi
-
-unsorted=$(mktemp /tmp/unsorted.XXXXXXXXXX)
-
-# Create a temporary working directory
-msg "creating working directory..."
-WDIR=$(mktemp -d /tmp/initrd-work.XXXXXXXXXX)
-
-# Create base directory structure
-msg "creating base structure directory..."
-mkdir -p $WDIR/{bin,dev,lib/firmware,run,sys,proc,usr}
-mkdir -p $WDIR/etc/{modprobe.d,udev/rules.d}
-touch $WDIR/etc/modprobe.d/modprobe.conf
-ln -s lib $WDIR/lib64
-ln -s ../bin $WDIR/usr/bin
-ln -s bin $WDIR/sbin
-ln -s ../bin $WDIR/usr/sbin
-
-# Create necessary device nodes
-msg "creating device nodes..."
-mknod -m 640 $WDIR/dev/console c 5 1
-mknod -m 664 $WDIR/dev/null    c 1 3
-
-# Install the udev configuration files
-msg "copying udev configuration..."
-if [ -f /etc/udev/udev.conf ]; then
-	cp --parent /etc/udev/udev.conf $WDIR
-fi
-
-for file in $(find /etc/udev/rules.d/ -type f) ; do
-	cp --parent $file $WDIR
-done
-
-if [ -d /lib/udev ]; then
-	cp -a /lib/udev $WDIR/lib
-fi
-# remove unneeded udev rules
-rm -f $WDIR/lib/udev/rules.d/60-vboxdrv.rules $WDIR/lib/udev/rules.d/69-xorg-vmmouse.rules
-
-# Install firmware
-if [ "$FIRMWARE" = 1 ]; then
-	msg "copying firmware..."
-	cp -Ra --parent /lib/firmware $WDIR
-fi
-
-# Install the init file
-msg "copying init file..."
-install -m0755 $INITIN $WDIR/init
-
-if [ "$NOKMOD" != 1 ]; then
-	if [ -x /bin/kmod ] ; then
-		binaries="$binaries kmod"
-	else
-		binaries="$binaries lsmod"
-		binaries="$binaries insmod"
-	fi
-fi
-
-msg "copying binaries..."
-for i in $binaries; do
-	copy $i bin
-	ldd $(PATH=/bin:/usr/bin:/sbin:/usr/sbin type -p $i) | sed "s/\t//" | cut -d " " -f1 >> $unsorted
-done
-
-# Add module symlinks if appropriate
-if [ -n "$KERNEL_VERSION" ] && [ -x $WDIR/bin/kmod ] ; then
-	ln -s kmod $WDIR/bin/lsmod
-	ln -s kmod $WDIR/bin/insmod
-fi
-
-# Install libraries
-msg "copying libraries..."
-sort $unsorted | uniq | grep -v ^not$ | while read library ; do
-	if [ "$library" == "linux-vdso.so.1" ] || [ "$library" == "linux-gate.so.1" ]; then
-		continue
-	fi
-	copy $library lib
-done
-
-# copy terminfo
-if [ -f /usr/share/terminfo/l/linux ]; then
-	msg "copying linux terminfo..."
-	cp --parent /usr/share/terminfo/l/linux $WDIR
-fi
-
-# copy requested files
-if [ "${#FILES[@]}" -gt 0 ]; then
-	for f in ${FILES[@]}; do
-		if [ -e $f ]; then
-			cp --parent $f $WDIR
-		fi
+parse_opt() {
+	while [ $1 ]; do
+		case $1 in
+			-k)	if [ -z $2 ]; then
+					echo "argument is needed for this option"
+					exit 1
+				fi
+				KERNEL=$2
+				shift 1 ;;
+			-o)	if [ -z $2 ]; then
+					echo "argument is needed for this option"
+					exit 1
+				fi
+				OUTPUT=$2
+				shift 1 ;;
+			-i)	if [ -z $2 ]; then
+					echo "argument is needed for this option"
+					exit 1
+				fi
+				INIT=$2
+				shift 1 ;;
+			-c)	if [ -z $2 ]; then
+					echo "argument is needed for this option"
+					exit 1
+				fi
+				CUSTCONFIG=$2
+				shift 1 ;;
+			-m) MINIMAL=1 ;;
+			-n) NOKMOD=1 ;;
+			-f)	FIRMWARE=1 ;;
+			-q)	QUIET=1 ;;
+			-h)	usage; exit 0 ;;
+			*)	echo "ERROR: invalid option '$1'"
+				exit 1 ;;
+		esac
+		shift
 	done
-fi
+}
 
-# extra modules for livecd
-extra_modules="cdrom mmc_core rtsx_pci rtsx_pci_sdmmc rtsx_pci_ms mmc_block ssb lpc_ich sdhci-acpi sdhci-pltfm sdhci sdhci-pci "
+automods() {
+	local mod
+	for mod in $(lsmod | awk 'NF==3{print $1}{}'); do
+		copy_modules $mod
+	done
+}
 
-# Install the kernel modules if requested
-if [ "$NOKMOD" != 1 ]; then
-	if [ "$AUTOMOD" = 1 ]; then
-		msg "copying automod modules..."
-		for i in $(lsmod | awk 'NF==3{print $1}{}'); do
-			copy_modules $i
-		done
+hugemods() {
+	local modules allmod
+	for modules in $(find /lib/modules/$KERNEL_VERSION/kernel/{crypto,fs} \
+		/lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,input,scsi} \
+		/lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,usb/{host,storage}} \
+		-type f 2> /dev/null); do
+		modules=$(basename $modules)
+		modules=$(echo ${modules%*.ko*})
+		copy_modules $(basename $modules)
+	done
+}
+
+main() {
+	parse_opt $@
+
+	if [ "$UID" != "0" ]; then
+		msgerr "need root access!"
+		exit 1
+	fi
+	
+	if [ ! $(type -p bsdcpio) ]; then
+		msgerr "'bsdcpio' not found, please install 'libarchive' package."
+		exit 1
+	fi
+	
+	if [ -f "$CONFIG" ]; then
+		. "$CONFIG"
+	fi
+	
+	if [ "$CUSTCONFIG" ]; then
+		if [ -f "$CUSTCONFIG" ]; then
+			. $CUSTCONFIG
+		else
+			msgerr "config file '$CUSTCONFIG' not exist"
+			exit 1
+		fi
+	fi
+	
+	if [ "$KERNEL" ]; then
+		if [ -d /lib/modules/"$KERNEL" ]; then
+			KERNEL_VERSION="$KERNEL"
+		else
+			msgerr "kernel directory '/lib/modules/$KERNEL' not exist"
+			exit 1
+		fi
 	else
-		msg "copying modules..."
-		for modules in $(find /lib/modules/$KERNEL_VERSION/kernel/{crypto,fs} \
-			/lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,input,scsi} \
-			/lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,usb/{host,storage}} \
-			-type f 2> /dev/null); do
-			modules=$(basename $modules)
-			modules=$(echo ${modules%*.ko*})
-			copy_modules $(basename $modules)
-		done
-		copy_modules $extra_modules
+		if [ ! -d /lib/modules/"$KERNEL_VERSION" ]; then
+			NOKMOD=1
+		fi
+	fi
+	
+	if [ "$INIT" ]; then
+		if [ -f "$INIT" ]; then
+			INITIN="$INIT"
+		else
+			msgerr "init file '$INIT' not exist"
+			exit 1
+		fi
+	fi
+	
+	if [ "$OUTPUT" ]; then
+		if [ $(basename $OUTPUT) != "$OUTPUT" ] && [ ! -d $(dirname $OUTPUT) ]; then
+			msgerr "directory '$(dirname $OUTPUT)' for output '$(basename $OUTPUT)' not exist"
+			exit 1
+		fi
+		INITRAMFS="$OUTPUT"
+	fi
+
+	if [ "$MINIMAL" = 1 ]; then
+		[ $QUIET ] || echo "Creating minimal $INITRAMFS..."
+	else
+		[ $QUIET ] || echo "Creating $INITRAMFS..."
+	fi
+	
+	msg "creating base structure directory..."
+	make_dirs
+
+	msg "copying init file..."
+	install -m0755 $INITIN $WDIR
+
+	msg "copying binaries and libraries..."
+	if [ "$MINIMAL" = 1 ]; then
+		copy_bins $MINIMALBIN
+	else
+		copy_bins $HUGEBIN
+	fi
+	
+	msg "copying required files..."
+	copy_files $REQFILES
+	if [ "$MINIMAL" = 1 ]; then
+		copy_files $UDEV_FILES_MIN
+	else
+		copy_files $UDEV_FILES
+	fi
+
+	if [ "$NOKMOD" != 1 ]; then
+		if [ "$MINIMAL" = 1 ]; then
+			msg "copying autodetect modules..."
+			automods
+		else
+			msg "copying modules..."
+			hugemods
+			copy_modules $extra_modules
+		fi
+		cp /lib/modules/$KERNEL_VERSION/modules.* \
+				$WDIR/lib/modules/$KERNEL_VERSION
+		depmod -b $WDIR $KERNEL_VERSION
+	fi
+	
+	if [ "$FIRMWARE" = 1 ]; then
+		msg "copying firmware..."
+		cp -Ra --parent /lib/firmware $WDIR
+	fi
+	
+	if [ "${#BINARIES[@]}" -gt 0 ]; then
+		msg "copying extra files..."
+		copy_bins ${BINARIES[@]}
 	fi
 	
 	if [ "${#MODULES[@]}" -gt 0 ]; then
+		msg "copying extra files..."
 		copy_modules ${MODULES[@]}
 	fi
+	
+	if [ "${#FILES[@]}" -gt 0 ]; then
+		msg "copying extra files..."
+		copy_files ${FILES[@]}
+	fi
 
-	cp /lib/modules/$KERNEL_VERSION/modules.* \
-			$WDIR/lib/modules/$KERNEL_VERSION
+	msg "compressing initramfs..."
+	rm -f $INITRAMFS
+	( cd $WDIR ; find . | bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
 
-	depmod -b $WDIR $KERNEL_VERSION
-fi
+	cleanup
+	[ $QUIET ] || echo "Done $INITRAMFS ($(ls -lah $INITRAMFS | awk '{print $5}'))"
+	
+	exit 0
+}
 
-msg "compressing initramfs..."
-rm -f $INITRAMFS_FILE
-( cd $WDIR ; find . | cpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS_FILE
+trap "interrupted" SIGHUP SIGINT SIGQUIT SIGTERM
 
-# Remove the temporary directory and file
-cleanup
-[ $QUIET ] || echo "Done $INITRAMFS_FILE"
+binaries="sh cat cp killall ls mkdir mount find xargs grep fgrep"
+binaries="$binaries umount sed sleep ln rm uname chroot chmod"
+binaries="$binaries readlink basename modprobe blkid switch_root"
+binaries="$binaries udevd udevadm kmod lsmod insmod setsid"
 
-exit 0
+HUGEBIN="$binaries"
+MINIMALBIN="sh mount kmod lsmod insmod udevd udevadm switch_root mkdir killall modprobe setsid"
+
+# extra modules for livecd
+extra_modules="cdrom mmc_core rtsx_pci rtsx_pci_sdmmc rtsx_pci_ms mmc_block ssb lpc_ich sdhci-acpi sdhci-pltfm sdhci sdhci-pci"
+
+WDIR="/tmp/mkinitramfs.$$"
+KERNEL_VERSION="$(uname -r)"
+INITIN="/usr/share/mkinitramfs/init.in"
+INITRAMFS="initrd-$KERNEL_VERSION.img"
+CONFIG="/etc/mkinitramfs.conf"
+
+REQFILES="/usr/share/terminfo/l/linux"
+
+UDEV_FILES="/etc/udev/udev.conf
+			$(find /etc/udev/rules.d/ -type f)
+			$(find /lib/udev/ -type f)"
+			
+UDEV_FILES_MIN="/etc/udev/udev.conf
+				/lib/udev/ata_id
+				/lib/udev/cdrom_id
+				/lib/udev/collect
+				/lib/udev/mtd_probe
+				/lib/udev/scsi_id
+				/lib/udev/rules.d/50-udev-default.rules
+				/lib/udev/rules.d/60-block.rules
+				/lib/udev/rules.d/60-cdrom_id.rules
+				/lib/udev/rules.d/60-drm.rules
+				/lib/udev/rules.d/60-evdev.rules
+				/lib/udev/rules.d/60-input-id.rules
+				/lib/udev/rules.d/60-persistent-input.rules
+				/lib/udev/rules.d/60-persistent-storage.rules
+				/lib/udev/rules.d/60-persistent-storage-tape.rules
+				/lib/udev/rules.d/60-serial.rules
+				/lib/udev/rules.d/64-btrfs.rules
+				/lib/udev/rules.d/75-net-description.rules
+				/lib/udev/rules.d/75-probe_mtd.rules
+				/lib/udev/rules.d/80-drivers.rules
+				/lib/udev/rules.d/80-net-name-slot.rules
+				/lib/udev/rules.d/96-e2scrub.rules"
+
+main $@
