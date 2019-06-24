@@ -31,19 +31,21 @@ copy_bins() {
 }
 
 copy_modules() {
-	pushd /lib/modules/ >/dev/null
-		mod=$(find $KERNEL_VERSION -type f -name $1.ko*)
+	pushd /lib/modules/$KERNEL_VERSION >/dev/null
+		if [ -f $1 ]; then
+			mod=$1
+		elif [ "$1" = "$(basename $1)" ]; then
+			mod=$(find . -type f -name $1.ko*)
+		fi
 	popd >/dev/null
-	if [ ! -n "$mod" ]; then
+	if [ ! "$mod" ]; then
 		return
 	fi
-	mod=$(echo $mod | awk '{print $1}')
-	cp -R --parent /lib/modules/$mod $WDIR
-	dep=$(cat /lib/modules/$KERNEL_VERSION/modules.dep | grep -E /$(basename $mod): | sed 's/.*://')
-	if [ -n "$dep" ]; then
+	mod=$(echo $mod | awk '{print $1}' | sed 's/^\.\///')
+	cp -R --parent /lib/modules/$KERNEL_VERSION/$mod $WDIR
+	dep=$(grep $mod: /lib/modules/$KERNEL_VERSION/modules.dep | sed 's/.*://')
+	if [ "$dep" ]; then
 		for i in $dep; do
-			i=$(basename $i)
-			i=$(echo ${i%*.ko*})
 			copy_modules $i
 		done
 	fi
@@ -273,12 +275,12 @@ main() {
 	fi
 	
 	if [ "${#BINARIES[@]}" -gt 0 ]; then
-		msg "copying extra files..."
+		msg "copying extra binaries..."
 		copy_bins ${BINARIES[@]}
 	fi
 	
 	if [ "${#MODULES[@]}" -gt 0 ]; then
-		msg "copying extra files..."
+		msg "copying extra modules..."
 		copy_modules ${MODULES[@]}
 	fi
 	
