@@ -31,6 +31,7 @@ copy_bins() {
 }
 
 copy_modules() {
+	mkdir -p $WDIR/lib/modules/$KERNEL_VERSION
 	pushd /lib/modules/$KERNEL_VERSION >/dev/null
 		if [ -f $1 ]; then
 			mod=$1
@@ -38,9 +39,9 @@ copy_modules() {
 			mod=$(find . -type f -name $1.ko*)
 		fi
 	popd >/dev/null
-	if [ ! "$mod" ]; then
-		return
-	fi
+	[ "$mod" ] || return
+	exist=$(find $WDIR/lib/modules/$KERNEL_VERSION -type f -name $(basename $mod))
+	[ "$exist" ] && return
 	mod=$(echo $mod | awk '{print $1}' | sed 's/^\.\///')
 	cp -R --parent /lib/modules/$KERNEL_VERSION/$mod $WDIR
 	dep=$(grep $mod: /lib/modules/$KERNEL_VERSION/modules.dep | sed 's/.*://')
@@ -49,7 +50,7 @@ copy_modules() {
 			copy_modules $i
 		done
 	fi
-	unset dep mod
+	unset dep mod exist
 	shift
 	if [ "$1" ]; then
 		copy_modules $@
@@ -241,6 +242,21 @@ main() {
 
 	msg "copying init file..."
 	install -m0755 $INITIN $WDIR/init
+	
+	if [ "${#BINARIES[@]}" -gt 0 ]; then
+		msg "copying extra binaries..."
+		copy_bins ${BINARIES[@]}
+	fi
+	
+	if [ "${#MODULES[@]}" -gt 0 ]; then
+		msg "copying extra modules..."
+		copy_modules ${MODULES[@]}
+	fi
+	
+	if [ "${#FILES[@]}" -gt 0 ]; then
+		msg "copying extra files..."
+		copy_files ${FILES[@]}
+	fi
 
 	msg "copying binaries and libraries..."
 	if [ "$MINIMAL" = 1 ]; then
@@ -272,21 +288,6 @@ main() {
 	if [ "$FIRMWARE" = 1 ]; then
 		msg "copying firmware..."
 		cp -Ra --parent /lib/firmware $WDIR
-	fi
-	
-	if [ "${#BINARIES[@]}" -gt 0 ]; then
-		msg "copying extra binaries..."
-		copy_bins ${BINARIES[@]}
-	fi
-	
-	if [ "${#MODULES[@]}" -gt 0 ]; then
-		msg "copying extra modules..."
-		copy_modules ${MODULES[@]}
-	fi
-	
-	if [ "${#FILES[@]}" -gt 0 ]; then
-		msg "copying extra files..."
-		copy_files ${FILES[@]}
 	fi
 
 	msg "compressing initramfs..."
