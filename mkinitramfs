@@ -31,7 +31,7 @@ copy_bins() {
 }
 
 copy_modules() {
-	mkdir -p $WDIR/lib/modules/$KERNEL_VERSION
+	mkdir -p $WDIR/lib/modules/$KERNEL_VERSION/kernel
 	pushd /lib/modules/$KERNEL_VERSION >/dev/null
 		if [ -f $1 ]; then
 			mod=$1
@@ -40,10 +40,8 @@ copy_modules() {
 		fi
 	popd >/dev/null
 	[ "$mod" ] || return
-	exist=$(find $WDIR/lib/modules/$KERNEL_VERSION -type f -name $(basename $mod))
-	[ "$exist" ] && return
 	mod=$(echo $mod | awk '{print $1}' | sed 's/^\.\///')
-	cp -R --parent /lib/modules/$KERNEL_VERSION/$mod $WDIR
+	cp /lib/modules/$KERNEL_VERSION/$mod $WDIR/lib/modules/$KERNEL_VERSION/kernel
 	dep=$(grep $mod: /lib/modules/$KERNEL_VERSION/modules.dep | sed 's/.*://')
 	if [ "$dep" ]; then
 		for i in $dep; do
@@ -242,21 +240,6 @@ main() {
 
 	msg "copying init file..."
 	install -m0755 $INITIN $WDIR/init
-	
-	if [ "${#BINARIES[@]}" -gt 0 ]; then
-		msg "copying extra binaries..."
-		copy_bins ${BINARIES[@]}
-	fi
-	
-	if [ "${#MODULES[@]}" -gt 0 ]; then
-		msg "copying extra modules..."
-		copy_modules ${MODULES[@]}
-	fi
-	
-	if [ "${#FILES[@]}" -gt 0 ]; then
-		msg "copying extra files..."
-		copy_files ${FILES[@]}
-	fi
 
 	msg "copying binaries and libraries..."
 	if [ "$MINIMAL" = 1 ]; then
@@ -282,6 +265,7 @@ main() {
 		fi
 		cp /lib/modules/$KERNEL_VERSION/modules.* \
 				$WDIR/lib/modules/$KERNEL_VERSION
+		awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $WDIR/lib/modules/$KERNEL_VERSION/modules.order
 		depmod -b $WDIR $KERNEL_VERSION
 	fi
 	
@@ -289,10 +273,25 @@ main() {
 		msg "copying firmware..."
 		cp -Ra --parent /lib/firmware $WDIR
 	fi
+	
+	if [ "${#BINARIES[@]}" -gt 0 ]; then
+		msg "copying extra binaries..."
+		copy_bins ${BINARIES[@]}
+	fi
+	
+	if [ "${#MODULES[@]}" -gt 0 ]; then
+		msg "copying extra modules..."
+		copy_modules ${MODULES[@]}
+	fi
+	
+	if [ "${#FILES[@]}" -gt 0 ]; then
+		msg "copying extra files..."
+		copy_files ${FILES[@]}
+	fi
 
-	msg "compressing initramfs..."
-	rm -f $INITRAMFS
-	( cd $WDIR ; find . | bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
+	msg "generating initramfs..."
+	rm -f "$INITRAMFS"
+	( cd $WDIR ; find . | LANG=C bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
 
 	cleanup
 	[ $QUIET ] || echo "Done $INITRAMFS ($(ls -lah $INITRAMFS | awk '{print $5}'))"
