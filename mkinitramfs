@@ -65,6 +65,17 @@ copy_files() {
 	fi
 }
 
+copy_firmware() {
+	local fw fwpath afw
+	for fw in $WDIR/lib/modules/$KERNEL_VERSION/kernel/*.ko*; do
+		fw=$(basename $fw)
+		fwpath="$(modinfo -b $WDIR -k $KERNEL_VERSION ${fw%.ko*} | grep firmware: | awk '{print $2}')"
+		for afw in $fwpath; do
+			copy_files /lib/firmware/$afw
+		done
+	done
+}
+
 make_dirs() {
 	mkdir -p $WDIR/{bin,dev,lib/firmware,run,sys,proc,usr}
 	mkdir -p $WDIR/etc/{modprobe.d,udev/rules.d}
@@ -167,7 +178,6 @@ hugemods() {
 		/lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,input,scsi} \
 		/lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,usb/{host,storage}} \
 		-type f 2> /dev/null); do
-		modules=$(basename $modules)
 		modules=$(echo ${modules%*.ko*})
 		copy_modules $(basename $modules)
 	done
@@ -267,11 +277,9 @@ main() {
 				$WDIR/lib/modules/$KERNEL_VERSION
 		awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $WDIR/lib/modules/$KERNEL_VERSION/modules.order
 		depmod -b $WDIR $KERNEL_VERSION
-	fi
 	
-	if [ "$FIRMWARE" = 1 ]; then
 		msg "copying firmware..."
-		cp -Ra --parent /lib/firmware $WDIR
+		copy_firmware
 	fi
 	
 	if [ "${#BINARIES[@]}" -gt 0 ]; then
