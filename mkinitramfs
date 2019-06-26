@@ -4,14 +4,14 @@ PATH=/bin:/usr/bin:/sbin:/usr/sbin
 
 copy_bins() {
 	binpath=$(type -p $1)
+	[ "$binpath" ] || return
 	binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f1)
 	
+	[ -f "$binpath" ] || msgwarn "missing binary: $1"
 	if [ -L $binpath ]; then
-		cp -n $(type -p $(basename $(readlink $binpath))) $WDIR/bin
-		ln -s $(basename $(readlink $binpath)) $WDIR/bin/$1
-	else
-		cp -n $binpath $WDIR/bin		
+		copy_files $(type -p $(basename $(readlink $binpath)))
 	fi
+	copy_files $binpath
 	
 	for lib in $binlib; do
 		case $lib in
@@ -19,7 +19,7 @@ copy_bins() {
 		esac
 		lib=$(PATH=/lib:/lib64:/usr/lib:/usr/lib64 type -p $lib)
 		if [ "$lib" ] && [ ! -e $WDIR/lib/$(basename $lib) ]; then
-			cp -n $lib $WDIR/lib
+			copy_files $lib
 		fi
 		unset lib
 	done
@@ -69,17 +69,35 @@ copy_firmware() {
 	local fw fwpath afw
 	for fw in $WDIR/lib/modules/$KERNEL_VERSION/kernel/*.ko*; do
 		fw=$(basename $fw)
-		fwpath="$(modinfo -b $WDIR -k $KERNEL_VERSION ${fw%.ko*} | grep firmware: | awk '{print $2}')"
+		fwpath="$(modinfo -b $WDIR -k $KERNEL_VERSION ${fw%.ko*} | grep ^firmware: | awk '{print $2}')"
 		for afw in $fwpath; do
+			[ -f /lib/firmware/$afw ] || msgwarn "missing firmware: $afw"
 			copy_files /lib/firmware/$afw
 		done
+	done
+}
+
+automods() {
+	local mod
+	for mod in $(lsmod | awk 'NF==3{print $1}{}'); do
+		copy_modules $mod
+	done
+}
+
+hugemods() {
+	local modules allmod
+	for modules in $(find /lib/modules/$KERNEL_VERSION/kernel/{crypto,fs} \
+		/lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,input,scsi} \
+		/lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,usb/{host,storage}} \
+		-type f 2> /dev/null); do
+		modules=$(echo ${modules%*.ko*})
+		copy_modules $(basename $modules)
 	done
 }
 
 make_dirs() {
 	mkdir -p $WDIR/{bin,dev,lib/firmware,run,sys,proc,usr}
 	mkdir -p $WDIR/etc/{modprobe.d,udev/rules.d}
-	touch $WDIR/etc/modprobe.d/modprobe.conf
 	ln -s lib $WDIR/lib64
 	ln -s ../bin $WDIR/usr/bin
 	ln -s bin $WDIR/sbin
@@ -97,6 +115,11 @@ msg() {
 msgerr() {
 	[ $QUIET ] && return
 	echo "ERROR: $@"
+}
+
+msgwarn() {
+	[ $QUIET ] && return
+	echo "WARNING: $@"
 }
 
 cleanup() {
@@ -118,8 +141,6 @@ Options:
   -o <output>   custom output name
   -i <init>     custom init file
   -m            create minimal initramfs
-  -f            include firmware
-  -n            exclude kernel modules
   -q            quiet mode
   -h            print this help msg
 	
@@ -154,32 +175,12 @@ parse_opt() {
 				CUSTCONFIG=$2
 				shift 1 ;;
 			-m) MINIMAL=1 ;;
-			-n) NOKMOD=1 ;;
-			-f)	FIRMWARE=1 ;;
 			-q)	QUIET=1 ;;
 			-h)	usage; exit 0 ;;
 			*)	echo "ERROR: invalid option '$1'"
 				exit 1 ;;
 		esac
 		shift
-	done
-}
-
-automods() {
-	local mod
-	for mod in $(lsmod | awk 'NF==3{print $1}{}'); do
-		copy_modules $mod
-	done
-}
-
-hugemods() {
-	local modules allmod
-	for modules in $(find /lib/modules/$KERNEL_VERSION/kernel/{crypto,fs} \
-		/lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,input,scsi} \
-		/lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,usb/{host,storage}} \
-		-type f 2> /dev/null); do
-		modules=$(echo ${modules%*.ko*})
-		copy_modules $(basename $modules)
 	done
 }
 
@@ -239,62 +240,44 @@ main() {
 		INITRAMFS="$OUTPUT"
 	fi
 
-	if [ "$MINIMAL" = 1 ]; then
-		[ $QUIET ] || echo "Creating minimal $INITRAMFS..."
-	else
-		[ $QUIET ] || echo "Creating $INITRAMFS..."
-	fi
+	[ $QUIET ] || echo "Generating initramfs..."
 	
 	msg "creating base structure directory..."
 	make_dirs
 
-	msg "copying init file..."
+	msg "copying init..."
 	install -m0755 $INITIN $WDIR/init
+	
+	msg "copying stuffs..."
+	copy_files /usr/share/terminfo/l/linux $UDEV_FILES ${FILES[@]}
 
-	msg "copying binaries and libraries..."
+	msg "copying binaries..."
 	if [ "$MINIMAL" = 1 ]; then
 		copy_bins $MINIMALBIN
 	else
 		copy_bins $HUGEBIN
 	fi
 	
-	msg "copying terminfo..."
-	copy_files /usr/share/terminfo/l/linux
+	copy_bins ${BINARIES[@]}
 	
-	msg "copying udev stuff..."
-	copy_files $UDEV_FILES
+	msg "copying modules..."
+	if [ "$MINIMAL" = 1 ]; then
+		automods
+	else
+		hugemods
+		copy_modules $extra_modules
+	fi
 	
-	if [ "$NOKMOD" != 1 ]; then
-		if [ "$MINIMAL" = 1 ]; then
-			msg "copying autodetect modules..."
-			automods
-		else
-			msg "copying modules..."
-			hugemods
-			copy_modules $extra_modules
-		fi
-		cp /lib/modules/$KERNEL_VERSION/modules.* \
-				$WDIR/lib/modules/$KERNEL_VERSION
-		awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $WDIR/lib/modules/$KERNEL_VERSION/modules.order
-		depmod -b $WDIR $KERNEL_VERSION
+	copy_modules ${MODULES[@]}
 	
-		msg "copying firmware..."
+	cp /lib/modules/$KERNEL_VERSION/modules.* \
+			$WDIR/lib/modules/$KERNEL_VERSION
+	awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $WDIR/lib/modules/$KERNEL_VERSION/modules.order
+	depmod -b $WDIR $KERNEL_VERSION	
+	
+	if [ -d $WDIR/lib/modules/$KERNEL_VERSION/kernel ]; then
+		msg "copying firmwares..."
 		copy_firmware
-	fi
-	
-	if [ "${#BINARIES[@]}" -gt 0 ]; then
-		msg "copying extra binaries..."
-		copy_bins ${BINARIES[@]}
-	fi
-	
-	if [ "${#MODULES[@]}" -gt 0 ]; then
-		msg "copying extra modules..."
-		copy_modules ${MODULES[@]}
-	fi
-	
-	if [ "${#FILES[@]}" -gt 0 ]; then
-		msg "copying extra files..."
-		copy_files ${FILES[@]}
 	fi
 
 	msg "generating initramfs..."
@@ -302,7 +285,7 @@ main() {
 	( cd $WDIR ; find . | LANG=C bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
 
 	cleanup
-	[ $QUIET ] || echo "Done $INITRAMFS ($(ls -lah $INITRAMFS | awk '{print $5}'))"
+	[ $QUIET ] || echo "Generating initramfs done: $INITRAMFS ($(ls -lah $INITRAMFS | awk '{print $5}'))"
 	
 	exit 0
 }
@@ -328,24 +311,11 @@ CONFIG="/etc/mkinitramfs.conf"
 UDEV_FILES="/etc/udev/udev.conf
             /lib/udev/ata_id
             /lib/udev/cdrom_id
-            /lib/udev/collect
-            /lib/udev/mtd_probe
             /lib/udev/scsi_id
             /lib/udev/rules.d/50-udev-default.rules
-            /lib/udev/rules.d/60-block.rules
-            /lib/udev/rules.d/60-cdrom_id.rules
-            /lib/udev/rules.d/60-drm.rules
-            /lib/udev/rules.d/60-evdev.rules
-            /lib/udev/rules.d/60-input-id.rules
-            /lib/udev/rules.d/60-persistent-input.rules
+            /lib/udev/rules.d/60-cdrom_id.
             /lib/udev/rules.d/60-persistent-storage.rules
-            /lib/udev/rules.d/60-persistent-storage-tape.rules
-            /lib/udev/rules.d/60-serial.rules
             /lib/udev/rules.d/64-btrfs.rules
-            /lib/udev/rules.d/75-net-description.rules
-            /lib/udev/rules.d/75-probe_mtd.rules
-            /lib/udev/rules.d/80-drivers.rules
-            /lib/udev/rules.d/80-net-name-slot.rules
-            /lib/udev/rules.d/96-e2scrub.rules"
+            /lib/udev/rules.d/80-drivers.rules"
 
 main $@
