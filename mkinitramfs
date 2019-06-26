@@ -31,28 +31,39 @@ copy_bins() {
 }
 
 copy_modules() {
-	mkdir -p $WDIR/lib/modules/$KERNEL_VERSION/kernel
-	pushd /lib/modules/$KERNEL_VERSION >/dev/null
-		if [ -f $1 ]; then
-			mod=$1
-		elif [ "$1" = "$(basename $1)" ]; then
-			mod=$(find . -type f -name $1.ko*)
-		fi
-	popd >/dev/null
-	[ "$mod" ] || return
-	mod=$(echo $mod | awk '{print $1}' | sed 's/^\.\///')
-	cp /lib/modules/$KERNEL_VERSION/$mod $WDIR/lib/modules/$KERNEL_VERSION/kernel
-	dep=$(grep $mod: /lib/modules/$KERNEL_VERSION/modules.dep | sed 's/.*://')
-	if [ "$dep" ]; then
-		for i in $dep; do
-			copy_modules $i
-		done
+	[ "$1" ] || return
+	if modinfo $1 &>/dev/null; then
+		modname=$(modinfo -F name $1)
+		modpath=$(modinfo -F filename $1)
+	else
+		msgwarn "missing module: $1"
+		return
 	fi
-	unset dep mod exist
+	mkdir -p $WDIR/lib/modules/$KERNEL_VERSION/kernel
+	cp $modpath $WDIR/lib/modules/$KERNEL_VERSION/kernel
+	modinfo -F depends -k $KERNEL_VERSION $modname | while IFS=',' read -r -a line; do
+		copy_modules ${line[@]}
+	done
+	unset modname modpath
 	shift
 	if [ "$1" ]; then
 		copy_modules $@
 	fi
+}
+
+copy_allmodules() {
+	if [ "$MINIMAL" = 1 ]; then
+		automods
+	else
+		hugemods
+		copy_modules $extra_modules
+	fi
+	
+	copy_modules ${MODULES[@]}
+	
+	cp /lib/modules/$KERNEL_VERSION/modules.* $WDIR/lib/modules/$KERNEL_VERSION
+	awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $WDIR/lib/modules/$KERNEL_VERSION/modules.order
+	depmod -b $WDIR $KERNEL_VERSION
 }
 
 copy_files() {
@@ -66,13 +77,12 @@ copy_files() {
 }
 
 copy_firmware() {
-	local fw fwpath afw
-	for fw in $WDIR/lib/modules/$KERNEL_VERSION/kernel/*.ko*; do
-		fw=$(basename $fw)
-		fwpath="$(modinfo -b $WDIR -k $KERNEL_VERSION ${fw%.ko*} | grep ^firmware: | awk '{print $2}')"
-		for afw in $fwpath; do
-			[ -f /lib/firmware/$afw ] || msgwarn "missing firmware: $afw"
-			copy_files /lib/firmware/$afw
+	local mod
+	for mod in $(find $WDIR/lib/modules/$KERNEL_VERSION/kernel/ -type f -name "*.ko*"); do
+		mod=$(basename $mod)
+		modinfo -b $WDIR -k $KERNEL_VERSION ${mod%.ko*} -F firmware | while read -r line; do
+			[ -f /lib/firmware/$line ] || msgwarn "missing firmware: $line"
+			copy_files /lib/firmware/$line
 		done
 	done
 }
@@ -86,10 +96,10 @@ automods() {
 
 hugemods() {
 	local modules allmod
-	for modules in $(find /lib/modules/$KERNEL_VERSION/kernel/{crypto,fs} \
-		/lib/modules/$KERNEL_VERSION/kernel/drivers/{block,ata,input,scsi} \
-		/lib/modules/$KERNEL_VERSION/kernel/drivers/{hid,usb/{host,storage}} \
-		-type f 2> /dev/null); do
+	for mod in $MODULES_DIR; do
+		FTGT="$FTGT /lib/modules/$KERNEL_VERSION/$mod"
+	done
+	for modules in $(find $FTGT	-type f -name "*.ko*" 2> /dev/null); do
 		modules=$(echo ${modules%*.ko*})
 		copy_modules $(basename $modules)
 	done
@@ -242,7 +252,7 @@ main() {
 
 	[ $QUIET ] || echo "Generating initramfs..."
 	
-	msg "creating base structure directory..."
+	msg "creating directories..."
 	make_dirs
 
 	msg "copying init..."
@@ -261,19 +271,7 @@ main() {
 	copy_bins ${BINARIES[@]}
 	
 	msg "copying modules..."
-	if [ "$MINIMAL" = 1 ]; then
-		automods
-	else
-		hugemods
-		copy_modules $extra_modules
-	fi
-	
-	copy_modules ${MODULES[@]}
-	
-	cp /lib/modules/$KERNEL_VERSION/modules.* \
-			$WDIR/lib/modules/$KERNEL_VERSION
-	awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $WDIR/lib/modules/$KERNEL_VERSION/modules.order
-	depmod -b $WDIR $KERNEL_VERSION	
+	copy_allmodules
 	
 	if [ -d $WDIR/lib/modules/$KERNEL_VERSION/kernel ]; then
 		msg "copying firmwares..."
@@ -317,5 +315,14 @@ UDEV_FILES="/etc/udev/udev.conf
             /lib/udev/rules.d/60-persistent-storage.rules
             /lib/udev/rules.d/64-btrfs.rules
             /lib/udev/rules.d/80-drivers.rules"
+MODULES_DIR="kernel/crypto
+             kernel/fs
+             kernel/drivers/block
+             kernel/drivers/ata
+             kernel/drivers/input
+             kernel/drivers/scsi
+             kernel/drivers/hid
+             kernel/drivers/usb/host
+             kernel/drivers/usb/storage"
 
 main $@
