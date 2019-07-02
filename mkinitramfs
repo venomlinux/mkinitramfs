@@ -2,16 +2,16 @@
 
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
 
-copy_bins() {
+add_bin() {
 	binpath=$(type -p $1)
 	[ "$binpath" ] || return
 	binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f1)
 	
 	[ -f "$binpath" ] || msgwarn "missing binary: $1"
 	if [ -L $binpath ]; then
-		copy_files $(type -p $(basename $(readlink $binpath)))
+		add_file $(type -p $(basename $(readlink $binpath)))
 	fi
-	copy_files $binpath
+	add_file $binpath
 	
 	for lib in $binlib; do
 		case $lib in
@@ -19,18 +19,18 @@ copy_bins() {
 		esac
 		lib=$(PATH=/lib:/lib64:/usr/lib:/usr/lib64 type -p $lib)
 		if [ "$lib" ] && [ ! -e $WDIR/lib/$(basename $lib) ]; then
-			copy_files $lib
+			add_file $lib
 		fi
 		unset lib
 	done
 	unset binpath binlib
 	shift
 	if [ "$1" ]; then
-		copy_bins $@
+		add_bin $@
 	fi
 }
 
-copy_modules() {
+add_module() {
 	[ "$1" ] || return
 	if modinfo $1 &>/dev/null; then
 		modname=$(modinfo -F name $1)
@@ -42,47 +42,48 @@ copy_modules() {
 	mkdir -p $WDIR/lib/modules/$KERNEL_VERSION/kernel
 	cp $modpath $WDIR/lib/modules/$KERNEL_VERSION/kernel
 	modinfo -F depends -k $KERNEL_VERSION $modname | while IFS=',' read -r -a line; do
-		copy_modules ${line[@]}
+		add_module ${line[@]}
 	done
 	unset modname modpath
 	shift
 	if [ "$1" ]; then
-		copy_modules $@
+		add_module $@
 	fi
 }
 
-copy_allmodules() {
+add_allmodules() {
 	if [ "$MINIMAL" = 1 ]; then
 		automods
 	else
 		hugemods
-		copy_modules $extra_modules
-	fi
-	
-	copy_modules ${MODULES[@]}
-	
+		add_module $extra_modules
+	fi	
+	add_module ${MODULES[@]}
+}
+
+finalize_modules() {	
 	cp /lib/modules/$KERNEL_VERSION/modules.* $WDIR/lib/modules/$KERNEL_VERSION
 	awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $WDIR/lib/modules/$KERNEL_VERSION/modules.order
 	depmod -b $WDIR $KERNEL_VERSION
 }
 
-copy_files() {
+add_file() {
 	if [ "$1" ] && [ -f "$1" ]; then
 		cp --parent $1 $WDIR
 	fi
 	shift
 	if [ "$1" ]; then
-		copy_files $@
+		add_file $@
 	fi
 }
 
-copy_firmware() {
+add_firmware() {
 	local mod
 	for mod in $(find $WDIR/lib/modules/$KERNEL_VERSION/kernel/ -type f -name "*.ko*"); do
 		mod=$(basename $mod)
 		modinfo -b $WDIR -k $KERNEL_VERSION ${mod%.ko*} -F firmware | while read -r line; do
 			[ -f /lib/firmware/$line ] || msgwarn "missing firmware: $line"
-			copy_files /lib/firmware/$line
+			add_file /lib/firmware/$line
 		done
 	done
 }
@@ -90,18 +91,26 @@ copy_firmware() {
 automods() {
 	local mod
 	for mod in $(lsmod | awk 'NF==3{print $1}{}'); do
-		copy_modules $mod
+		add_module $mod
 	done
 }
 
 hugemods() {
-	local modules allmod
-	for mod in $MODULES_DIR; do
+	local modules mod
+	for mod in $HUGEMODULES; do
 		FTGT="$FTGT /lib/modules/$KERNEL_VERSION/$mod"
 	done
-	for modules in $(find $FTGT	-type f -name "*.ko*" 2> /dev/null); do
+	for modules in $(find $FTGT -type f -name "*.ko*" 2> /dev/null); do
 		modules=$(echo ${modules%*.ko*})
-		copy_modules $(basename $modules)
+		add_module $(basename $modules)
+	done
+}
+
+run_build_hook() {
+	local hook build_hook
+	for hook in $(find /etc/mkinitramfs.d/ -name "*.hook"); do
+		source $hook
+		[ "$(type -t build_hook)" = "function" ] && build_hook &>/dev/null
 	done
 }
 
@@ -215,7 +224,7 @@ main() {
 		if [ -f "$CUSTCONFIG" ]; then
 			. $CUSTCONFIG
 		else
-			msgerr "config file '$CUSTCONFIG' not exist"
+			msgerr "config file '$CUSTCONFIG' not exist."
 			exit 1
 		fi
 	fi
@@ -224,7 +233,7 @@ main() {
 		if [ -d /lib/modules/"$KERNEL" ]; then
 			KERNEL_VERSION="$KERNEL"
 		else
-			msgerr "kernel directory '/lib/modules/$KERNEL' not exist"
+			msgerr "kernel directory '/lib/modules/$KERNEL' not exist."
 			exit 1
 		fi
 	else
@@ -237,14 +246,14 @@ main() {
 		if [ -f "$INIT" ]; then
 			INITIN="$INIT"
 		else
-			msgerr "init file '$INIT' not exist"
+			msgerr "init file '$INIT' not exist."
 			exit 1
 		fi
 	fi
 	
 	if [ "$OUTPUT" ]; then
 		if [ $(basename $OUTPUT) != "$OUTPUT" ] && [ ! -d $(dirname $OUTPUT) ]; then
-			msgerr "directory '$(dirname $OUTPUT)' for output '$(basename $OUTPUT)' not exist"
+			msgerr "directory '$(dirname $OUTPUT)' for output '$(basename $OUTPUT)' not exist."
 			exit 1
 		fi
 		INITRAMFS="$OUTPUT"
@@ -259,23 +268,30 @@ main() {
 	install -m0755 $INITIN $WDIR/init
 	
 	msg "copying stuffs..."
-	copy_files /usr/share/terminfo/l/linux $UDEV_FILES ${FILES[@]}
+	add_file /usr/share/terminfo/l/linux $UDEV_FILES ${FILES[@]}
 
 	msg "copying binaries..."
 	if [ "$MINIMAL" = 1 ]; then
-		copy_bins $MINIMALBIN
+		add_bin $MINIMALBIN
 	else
-		copy_bins $HUGEBIN
+		add_bin $HUGEBIN
 	fi
 	
-	copy_bins ${BINARIES[@]}
+	add_bin ${BINARIES[@]}
 	
 	msg "copying modules..."
-	copy_allmodules
+	add_allmodules
+	
+	if [ -d /etc/mkinitramfs.d/ ]; then
+		msg "running build_hook..."
+		run_build_hook
+	fi
+	
+	finalize_modules
 	
 	if [ -d $WDIR/lib/modules/$KERNEL_VERSION/kernel ]; then
 		msg "copying firmwares..."
-		copy_firmware
+		add_firmware
 	fi
 
 	msg "generating initramfs..."
@@ -283,7 +299,7 @@ main() {
 	( cd $WDIR ; find . | LANG=C bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
 
 	cleanup
-	[ $QUIET ] || echo "Generating initramfs done: $INITRAMFS ($(ls -lah $INITRAMFS | awk '{print $5}'))"
+	[ $QUIET ] || echo "Generating initramfs done: $INITRAMFS ($(du -h $INITRAMFS | awk '{print $1}'))"
 	
 	exit 0
 }
@@ -315,7 +331,7 @@ UDEV_FILES="/etc/udev/udev.conf
             /lib/udev/rules.d/60-persistent-storage.rules
             /lib/udev/rules.d/64-btrfs.rules
             /lib/udev/rules.d/80-drivers.rules"
-MODULES_DIR="kernel/crypto
+HUGEMODULES="kernel/crypto
              kernel/fs
              kernel/drivers/block
              kernel/drivers/ata
