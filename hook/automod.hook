@@ -1,0 +1,8 @@
+#!/bin/bash
+
+build_hook() {
+	local mod
+	for mod in /sys/module/*; do
+		add_module $(basename $mod)
+	done
+}
