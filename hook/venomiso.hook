@@ -1,0 +1,72 @@
+#!/bin/bash
+
+build_hook() {
+	add_module cdrom loop overlay
+	
+	add_file /lib/udev/rules.d/60-cdrom_id.rules \
+	         /lib/udev/rules.d/10-dm.rules \
+	         /lib/udev/rules.d/95-dm-notify.rules
+	         
+	add_binary /lib/udev/cdrom_id \
+			blockdev dmsetup losetup
+}
+
+run_earlyhook() {
+	local mod
+	for mod in cdrom loop overlay; do
+		modprobe $mod 2>/dev/null
+	done
+	
+	mount_handler=mount_venomiso
+}
+
+mount_venomiso() {
+	newroot=$1
+		
+	MEDIA=/dev/disk/by-label/VenomLive
+	MEDIUM=/run/initramfs/medium
+	SYSTEM=/run/initramfs/system
+	WRITEDIR=/run/initramfs/overlayfs/write
+	WORKDIR=/run/initramfs/overlayfs/work
+	sfsimg=/run/initramfs/medium/filesystem/root.sfs
+	
+	mkdir -p $MEDIUM $SYSTEM $WRITEDIR $WORKDIR
+	
+	msg "mounting media to '$SYSTEM'..."
+	mount -o ro $MEDIA $MEDIUM || problem
+	
+	if [ "$ram" = y ]; then
+		msg "mounting '/run/initramfs/copytoram' to ram..."
+		mkdir -p /run/initramfs/copytoram
+		mount -t tmpfs -o "size=75%",mode=0755 copytoram /run/initramfs/copytoram || problem
+		msg "copying squashfs img to '/run/initramfs/copytoram'..."
+		cp $sfsimg /run/initramfs/copytoram/ || problem
+		sfsimg=/run/initramfs/copytoram/root.sfs
+	fi
+	sfs_dev=$(losetup --find --show --read-only $sfsimg)
+	msg "mounting squashfs img to '$SYSTEM'..."
+	mount -o defaults -r $sfs_dev $SYSTEM || problem
+
+	# overlayfs mount	
+	msg "mounting overlays to $newroot..."
+	mount -t overlay overlay -o upperdir=$WRITEDIR,lowerdir=$SYSTEM,workdir=$WORKDIR $newroot || problem
+
+	if [ -d $MEDIUM/virootfs/ ]; then
+		msg "copying custom files to $newroot..."
+		cp -aR $MEDIUM/virootfs/* $newroot/ || problem
+	fi
+
+	# Tell system to skip fsck during startup
+	> $newroot/fastboot
+
+	# Execute custom script before switch root
+	if [ -f $newroot/root/custom_script.sh ]; then
+		msg "running 'custom_script.sh' script..."
+		chmod +x $newroot/root/custom_script.sh
+		chroot $newroot bash /root/custom_script.sh 2>/dev/null
+	fi
+	
+	if [ "$ram" = y ]; then
+		umount $MEDIUM
+	fi
+}

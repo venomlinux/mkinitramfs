@@ -8,174 +8,112 @@ shell() {
 }
 
 problem() {
-	echo
 	echo "problem occurs, here's a shell."
-	echo
 	shell
 }
 
 msg() {
-	[ "$verbose" = 1  ] || return
+	[ "$verbose" = y  ] || return
 	echo ":: $*"
 }
 
-findmedia() {
-	local device
-	msg "finding media..."
-	for device in /dev/sd* /dev/sr*; do
-		[ -b $device ] || continue
-		msg "find in $device..."
-		mount -o ro $device $MEDIUM &>/dev/null && \
-		if [ -f $MEDIUM/isolinux/venomlive ]; then
-			msg "media found: $device"
-			MEDIA=$device
-			break
-		else
-			umount $MEDIUM
-		fi
-	done
+mount_setup() {
+	mount -t proc proc /proc -o nosuid,noexec,nodev
+	mount -t sysfs sys /sys -o nosuid,noexec,nodev
+	mount -t devtmpfs dev /dev -o mode=0755,nosuid
+	mount -t tmpfs run /run -o nosuid,nodev,mode=0755
 }
 
-mount_root() {
-	mkdir -p $ROOT
-	
-	[ -n "$rootflags" ] && rootflags="$rootflags,"
-	rootflags="$rootflags$ro"
+move_mount_setup() {
+	mount --move /proc /newroot/proc
+	mount --move /sys /newroot/sys
+	mount --move /dev /newroot/dev
+	mount --move /run /newroot/run	
+}
+
+parse_cmdline() {
+	read -r cmdline < /proc/cmdline
+
+	for param in $cmdline ; do
+		case $param in
+			*=*) key=${param%%=*}
+				 value=${param#*=} ;;
+			*) key=$param
+		esac
+		case $key in
+			ro|rw) rwopt=$value ;;
+			*) eval "$key"=${value:-y} ;;
+		esac
+		unset key value
+	done
 
 	case "$root" in
 		/dev/* ) device=$root ;;
 		UUID=* ) eval $root; device="/dev/disk/by-uuid/$UUID"  ;;
 		LABEL=*) eval $root; device="/dev/disk/by-label/$LABEL" ;;
-		""     ) echo "No root device specified." ; sh    ;;
 	esac
-
-	while [ ! -b "$device" ] ; do
-		echo "no device: $device"
+}
+	
+mount_root() {
+	newroot=$1
+	if [ ! "$device" ]; then
+		echo "device not scpecified!"
 		shell
-	done
-
-	if ! mount -n -t "$rootfstype" -o "$rootflags" "$device" "$ROOT" ; then
+	fi
+	if ! mount -n ${rootfstype:+-t $rootfstype} -o ${rwopt:-ro}${rootflags:+,$rootflags} "$device" "$newroot" ; then
 		echo "cant mount: $device"
 		shell
 	fi
 }
 
-mount_live() {
-	MEDIUM=/medium
-	SYSTEM=/system
-	mkdir -p $MEDIUM $SYSTEM
-	findmedia
-	if [ "$MEDIA" = "" ]; then
-		msg "Media not found, will try again in $delay seconds..."
-		sleep $delay
-		findmedia
-		if [ "$MEDIA" = "" ]; then
-			msg "media still not found!"
-			msg "you've been dropped to a shell."
-			shell
-		fi
+run_hook() {
+	local stage=$1
+	local line
+	if [ -f /hook/hook.order ]; then
+		case $stage in
+			cleanup) sed '1!G;h;$!d' /hook/hook.order > /hook/hook.orderreverse
+					 mv /hook/hook.orderreverse /hook/hook.order ;;
+		esac
+		while read -r line; do
+			source /hook/$line
+			if [ "$(type -t run_${stage}hook)" = "function" ]; then
+				msg "running ${stage}hook: $line"
+				run_${stage}hook
+			fi
+			unset -f run_earlyhook run_latehook run_cleanuphook build_hook
+		done < /hook/hook.order
 	fi
-	msg "mounting root.sfs to $SYSTEM..."
-	mount -t squashfs -o ro,loop $MEDIUM/filesystem/root.sfs $SYSTEM || problem
-	
-	# overlayfs mount
-	WRITEDIR=/venom/write
-	WORKDIR=/venom/work
-	mkdir -p /venom
-	mount -t tmpfs -o rw tmpfs /venom
-	mkdir -p $WRITEDIR $WORKDIR $ROOT
-
-	msg "mounting overlays to $ROOT..."
-	mount -t overlay overlay -o upperdir=$WRITEDIR,lowerdir=$SYSTEM,workdir=$WORKDIR $ROOT || problem
-
-	if [ -d $MEDIUM/virootfs/ ]; then
-		msg "mopying custom files to $ROOT..."
-		cp -aR $MEDIUM/virootfs/* $ROOT/ || problem
-	fi
-
-	# Tell system to skip fsck during startup
-	> $ROOT/fastboot
-
-	# Execute custom script before switch root
-	if [ -f $ROOT/root/custom_script.sh ]; then
-		msg "running 'custom_script.sh' script..."
-		chmod +x $ROOT/root/custom_script.sh
-		chroot $ROOT bash /root/custom_script.sh 2>/dev/null
-	fi
-
-	# Move mounted squashfs file to new root
-	mkdir -p $ROOT/lib/initramfs/{$SYSTEM,$MEDIUM}
-	mount --move $SYSTEM $ROOT/lib/initramfs/$SYSTEM
-	mount --move $MEDIUM $ROOT/lib/initramfs/$MEDIUM
 }
 
-load_livecd_modules() {
-	local mod
-	for mod in dm-mod md-mod ehci-pci overlay \
-		xhci-pci xhci-hcd ehci-hcd nls_iso8859_1 \
-		uhci-hcd uas sr_mod usb-storage loop \
-		squashfs isofs vfat fat nls_cp437; do
-		modprobe $mod 2>/dev/null
-	done
-}
-
+mount_handler=mount_root
 init=/sbin/init
-root=
-rootdelay=
 rootfstype=auto
-ro="ro"
-rootflags=
-device=
-initramfs=
-verbose=
-delay=5
-ROOT=/newroot
 
-mount -n -t devtmpfs devtmpfs /dev
-mount -n -t proc     proc     /proc
-mount -n -t sysfs    sysfs    /sys
-mount -n -t tmpfs    tmpfs    /run
+mount_setup
 
-read -r cmdline < /proc/cmdline
+parse_cmdline
 
-for param in $cmdline ; do
-	case $param in
-		init=*      ) init=${param#init=}             ;;
-		root=*      ) root=${param#root=}             ;;
-		rootdelay=* ) rootdelay=${param#rootdelay=}   ;;
-		rootfstype=*) rootfstype=${param#rootfstype=} ;;
-		rootflags=* ) rootflags=${param#rootflags=}   ;;
-		ro          ) ro="ro"                         ;;
-		rw          ) ro="rw"                         ;;
-		initramfs   ) initramfs=1                     ;;
-		verbose     ) verbose=1                       ;;
-		delay       ) delay=${param#delay=}           ;;
-	esac
-done
+run_hook early
 
-udevd --daemon --resolve-names=never
-udevadm trigger --action=add    --type=subsystems
-udevadm trigger --action=add    --type=devices
-udevadm trigger --action=change --type=devices
-udevadm settle
-
-if [ "$initramfs" = 1 ]; then
+if [ "$break" = "premount" ]; then
+	echo "break on pre-mount requested"
+	echo "exit this shell to continue booting"
 	shell
 fi
 
-if [ "$root" = "" ]; then
-	load_livecd_modules
-	mount_live
-else
-	mount_root
+$mount_handler /newroot
+
+run_hook late
+run_hook cleanup
+
+if [ "$break" = "postmount" ]; then
+	echo "break on post-mount requested"
+	echo "exit this shell to continue booting"
+	shell
 fi
 
-killall -w udevd
+move_mount_setup
 
-mount --move /proc $ROOT/proc
-mount --move /sys $ROOT/sys
-mount --move /dev $ROOT/dev
-
-exec switch_root "$ROOT" "$init" "$@"
+exec switch_root /newroot "$init" "$@"
 
 problem

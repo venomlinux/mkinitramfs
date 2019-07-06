@@ -1,0 +1,26 @@
+#!/bin/bash
+
+build_hook() {
+	add_file /etc/udev/udev.conf \
+             /lib/udev/rules.d/50-udev-default.rules \
+             /lib/udev/rules.d/60-persistent-storage.rules \
+             /lib/udev/rules.d/64-btrfs.rules \
+             /lib/udev/rules.d/80-drivers.rules
+
+	add_binary udevd udevadm \
+	        /lib/udev/ata_id \
+	        /lib/udev/scsi_id
+}
+
+run_earlyhook() {
+	udevd --daemon --resolve-names=never
+	udevadm trigger --action=add    --type=subsystems
+	udevadm trigger --action=add    --type=devices
+	udevadm trigger --action=change --type=devices
+	udevadm settle
+}
+
+run_cleanuphook() {
+	udevadm control --exit
+	udevadm info --cleanup-db
+}

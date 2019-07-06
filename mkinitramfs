@@ -2,7 +2,7 @@
 
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
 
-add_bin() {
+add_binary() {
 	binpath=$(type -p $1)
 	[ "$binpath" ] || return
 	binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f1)
@@ -18,7 +18,7 @@ add_bin() {
 			linux-vdso.so.1|linux-gate.so.1) continue ;;
 		esac
 		lib=$(PATH=/lib:/lib64:/usr/lib:/usr/lib64 type -p $lib)
-		if [ "$lib" ] && [ ! -e $WDIR/lib/$(basename $lib) ]; then
+		if [ "$lib" ] && [ ! -e $INITDIR/lib/$(basename $lib) ]; then
 			add_file $lib
 		fi
 		unset lib
@@ -26,7 +26,7 @@ add_bin() {
 	unset binpath binlib
 	shift
 	if [ "$1" ]; then
-		add_bin $@
+		add_binary $@
 	fi
 }
 
@@ -39,8 +39,12 @@ add_module() {
 		msgwarn "missing module: $1"
 		return
 	fi
-	mkdir -p $WDIR/lib/modules/$KERNEL_VERSION/kernel
-	cp $modpath $WDIR/lib/modules/$KERNEL_VERSION/kernel
+	mkdir -p $INITDIR/lib/modules/$KERNEL_VERSION/kernel
+	cp $modpath $INITDIR/lib/modules/$KERNEL_VERSION/kernel
+	modinfo -F firmware -k $KERNEL_VERSION $modname | while read -r line; do
+		[ -f /lib/firmware/$line ] || msgwarn "missing firmware for $modname: $line"
+		add_file /lib/firmware/$line
+	done
 	modinfo -F depends -k $KERNEL_VERSION $modname | while IFS=',' read -r -a line; do
 		add_module ${line[@]}
 	done
@@ -51,25 +55,16 @@ add_module() {
 	fi
 }
 
-add_allmodules() {
-	if [ "$MINIMAL" = 1 ]; then
-		automods
-	else
-		hugemods
-		add_module $extra_modules
-	fi	
-	add_module ${MODULES[@]}
-}
-
-finalize_modules() {	
-	cp /lib/modules/$KERNEL_VERSION/modules.* $WDIR/lib/modules/$KERNEL_VERSION
-	awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $WDIR/lib/modules/$KERNEL_VERSION/modules.order
-	depmod -b $WDIR $KERNEL_VERSION
+finalize_modules() {
+	[ -d $INITDIR/lib/modules/$KERNEL_VERSION/kernel ] || return
+	cp /lib/modules/$KERNEL_VERSION/modules.* $INITDIR/lib/modules/$KERNEL_VERSION
+	awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $INITDIR/lib/modules/$KERNEL_VERSION/modules.order
+	depmod -b $INITDIR $KERNEL_VERSION
 }
 
 add_file() {
 	if [ "$1" ] && [ -f "$1" ]; then
-		cp --parent $1 $WDIR
+		cp --parent $1 $INITDIR
 	fi
 	shift
 	if [ "$1" ]; then
@@ -77,53 +72,37 @@ add_file() {
 	fi
 }
 
-add_firmware() {
-	local mod
-	for mod in $(find $WDIR/lib/modules/$KERNEL_VERSION/kernel/ -type f -name "*.ko*"); do
-		mod=$(basename $mod)
-		modinfo -b $WDIR -k $KERNEL_VERSION ${mod%.ko*} -F firmware | while read -r line; do
-			[ -f /lib/firmware/$line ] || msgwarn "missing firmware: $line"
-			add_file /lib/firmware/$line
-		done
-	done
-}
-
-automods() {
-	local mod
-	for mod in $(lsmod | awk 'NF==3{print $1}{}'); do
-		add_module $mod
-	done
-}
-
-hugemods() {
-	local modules mod
-	for mod in $HUGEMODULES; do
-		FTGT="$FTGT /lib/modules/$KERNEL_VERSION/$mod"
-	done
-	for modules in $(find $FTGT -type f -name "*.ko*" 2> /dev/null); do
-		modules=$(echo ${modules%*.ko*})
-		add_module $(basename $modules)
-	done
-}
-
 run_build_hook() {
 	local hook build_hook
-	for hook in $(find /etc/mkinitramfs.d/ -name "*.hook"); do
-		source $hook
-		[ "$(type -t build_hook)" = "function" ] && build_hook &>/dev/null
-	done
+	[ -d "$HOOKDIRS" ] || return
+	if [ "${#HOOKS[@]}" -gt 0 ]; then
+		for hook in ${HOOKS[@]}; do
+			[ "$(echo ${DONEHOOK[@]} | tr ' ' '\n' | grep -x $hook)" = "$hook" ] && continue
+			if [ -f "$HOOKDIRS"/$hook.hook ]; then
+				source "$HOOKDIRS"/$hook.hook
+				if [ "$(type -t build_hook)" = "function" ]; then
+					msg "running build_hook: $hook"
+					build_hook
+				fi
+				echo $hook >> $INITDIR/hook/hook.order
+				install -m755 "$HOOKDIRS"/$hook.hook $INITDIR/hook/$hook
+				DONEHOOK+=($hook)
+			fi
+		done
+	fi
 }
 
 make_dirs() {
-	mkdir -p $WDIR/{bin,dev,lib/firmware,run,sys,proc,usr}
-	mkdir -p $WDIR/etc/{modprobe.d,udev/rules.d}
-	ln -s lib $WDIR/lib64
-	ln -s ../bin $WDIR/usr/bin
-	ln -s bin $WDIR/sbin
-	ln -s ../bin $WDIR/usr/sbin
+	mkdir -p $INITDIR/{bin,dev,lib/firmware,run,sys,proc,usr}
+	mkdir -p $INITDIR/etc/{modprobe.d,udev/rules.d}
+	ln -s lib $INITDIR/lib64
+	ln -s ../bin $INITDIR/usr/bin
+	ln -s bin $INITDIR/sbin
+	ln -s ../bin $INITDIR/usr/sbin
+	mkdir -p $INITDIR/{hook,newroot}
 
-	mknod -m 640 $WDIR/dev/console c 5 1
-	mknod -m 664 $WDIR/dev/null    c 1 3
+	mknod -m 640 $INITDIR/dev/console c 5 1
+	mknod -m 664 $INITDIR/dev/null    c 1 3
 }
 
 msg() {
@@ -142,7 +121,7 @@ msgwarn() {
 }
 
 cleanup() {
-	rm -fr $WDIR
+	rm -fr $INITDIR
 }
 
 interrupted() {
@@ -153,47 +132,65 @@ interrupted() {
 usage() {	
 	cat << EOF
 Usage:
-  $(basename $0) <option> <argument>
+  $(basename $0) [option] [argument]
   
 Options:
-  -k <version>  custom kernel version
-  -o <output>   custom output name
-  -i <init>     custom init file
-  -m            create minimal initramfs
+  -k <version>  custom kernel version (default: $(uname -r))
+  -o <output>   custom output name (default: $INITRAMFS)
+  -i <init>     custom init file (default: $INITIN)
+  -m <modules>  add extra modules (comma separated)
+  -b <binaries  add extra binary (comma separated)
+  -f <file>     add extra file (comma separated & absolute path)
+  -c <config>   use custom config (default: $CONFIG)
+  -A <hook>     add extra hook (comma separated, precedence over -a, -s & HOOKS)
+  -a <hook>     add extra hook (comma separated, precedence over -s & after HOOKS)
+  -s <hook>     skip hook defined in HOOKS
   -q            quiet mode
   -h            print this help msg
 	
 EOF
 }
 
+needarg() {
+	if [ ! "$1" ]; then
+		echo "ERROR: argument is needed for this option!"
+		exit 1
+	fi
+}		
+
 parse_opt() {
 	while [ $1 ]; do
 		case $1 in
-			-k)	if [ -z $2 ]; then
-					echo "argument is needed for this option"
-					exit 1
-				fi
+			-k)	needarg $2
 				KERNEL=$2
 				shift 1 ;;
-			-o)	if [ -z $2 ]; then
-					echo "argument is needed for this option"
-					exit 1
-				fi
+			-o)	needarg $2
 				OUTPUT=$2
 				shift 1 ;;
-			-i)	if [ -z $2 ]; then
-					echo "argument is needed for this option"
-					exit 1
-				fi
+			-i)	needarg $2
 				INIT=$2
 				shift 1 ;;
-			-c)	if [ -z $2 ]; then
-					echo "argument is needed for this option"
-					exit 1
-				fi
+			-c)	needarg $2
 				CUSTCONFIG=$2
 				shift 1 ;;
-			-m) MINIMAL=1 ;;
+			-A)	needarg $2
+			    IFS=, read -r -a ADDEARLYHOOKS <<< $2
+				shift 1 ;;
+			-a)	needarg $2
+			    IFS=, read -r -a ADDHOOKS <<< $2
+				shift 1 ;;
+			-s)	needarg $2
+			    IFS=, read -r -a SKIPHOOKS <<< $2
+				shift 1 ;;
+			-m) needarg $2
+			    IFS=, read -r -a ADDMODULES <<< $2
+				shift 1 ;;
+			-b) needarg $2
+			    IFS=, read -r -a ADDBINARIES <<< $2
+				shift 1 ;;
+			-f) needarg $2
+			    IFS=, read -r -a ADDFILES <<< $2
+				shift 1 ;;
 			-q)	QUIET=1 ;;
 			-h)	usage; exit 0 ;;
 			*)	echo "ERROR: invalid option '$1'"
@@ -258,45 +255,71 @@ main() {
 		fi
 		INITRAMFS="$OUTPUT"
 	fi
+	
+	# filter out skip hooks (-s)
+	if [ "${#SKIPHOOKS[@]}" -gt 0 ] && [ "${#HOOKS[@]}" -gt 0 ]; then
+		for s in ${!SKIPHOOKS[@]}; do
+			for h in ${!HOOKS[@]}; do
+				if [ "${SKIPHOOKS[s]}" = "${HOOKS[h]}" ]; then
+					unset 'HOOKS[h]'
+					break
+				fi
+			done
+		done
+	fi
+	
+	# add extra hooks (-a)
+	if [ "${#ADDHOOKS[@]}" -gt 0 ]; then
+		HOOKS+=(${ADDHOOKS[@]})
+	fi
+	
+	# add extra early hooks (-A)
+	if [ "${#ADDEARLYHOOKS[@]}" -gt 0 ]; then
+		ADDEARLYHOOKS+=(${HOOKS[@]})
+		HOOKS=(${ADDEARLYHOOKS[@]})
+	fi
+	
+	# add extra modules (-m)
+	if [ "${#ADDMODULES[@]}" -gt 0 ]; then
+		MODULES+=(${ADDMODULES[@]})
+	fi
+	
+	# add extra files (-f)
+	if [ "${#ADDFILES[@]}" -gt 0 ]; then
+		FILES+=(${ADDFILES[@]})
+	fi
+	
+	# add extra binary (-b)
+	if [ "${#ADDBINARIES[@]}" -gt 0 ]; then
+		BINARIES+=(${ADDBINARIES[@]})
+	fi
 
 	[ $QUIET ] || echo "Generating initramfs..."
 	
-	msg "creating directories..."
-	make_dirs
-
-	msg "copying init..."
-	install -m0755 $INITIN $WDIR/init
+	mkdir -p $INITDIR/{hook,newroot}
+	install -m0755 $INITIN $INITDIR/init
+	run_build_hook
 	
-	msg "copying stuffs..."
-	add_file /usr/share/terminfo/l/linux $UDEV_FILES ${FILES[@]}
-
-	msg "copying binaries..."
-	if [ "$MINIMAL" = 1 ]; then
-		add_bin $MINIMALBIN
-	else
-		add_bin $HUGEBIN
+	if [ "${#BINARIES[@]}" -gt 0 ]; then
+		msg "adding extra binaries..."
+		add_binary ${BINARIES[@]}
 	fi
 	
-	add_bin ${BINARIES[@]}
+	if [ "${#MODULES[@]}" -gt 0 ]; then
+		msg "adding extra modules..."
+		add_module ${MODULES[@]}
+	fi
 	
-	msg "copying modules..."
-	add_allmodules
-	
-	if [ -d /etc/mkinitramfs.d/ ]; then
-		msg "running build_hook..."
-		run_build_hook
+	if [ "${#FILES[@]}" -gt 0 ]; then
+		msg "adding extra files..."
+		add_file ${FILES[@]}
 	fi
 	
 	finalize_modules
-	
-	if [ -d $WDIR/lib/modules/$KERNEL_VERSION/kernel ]; then
-		msg "copying firmwares..."
-		add_firmware
-	fi
 
 	msg "generating initramfs..."
 	rm -f "$INITRAMFS"
-	( cd $WDIR ; find . | LANG=C bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
+	( cd $INITDIR ; find . | LANG=C bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
 
 	cleanup
 	[ $QUIET ] || echo "Generating initramfs done: $INITRAMFS ($(du -h $INITRAMFS | awk '{print $1}'))"
@@ -306,39 +329,11 @@ main() {
 
 trap "interrupted" SIGHUP SIGINT SIGQUIT SIGTERM
 
-binaries="sh cat cp killall ls mkdir mount find xargs grep fgrep"
-binaries="$binaries umount sed sleep ln rm uname chroot chmod"
-binaries="$binaries readlink basename modprobe blkid switch_root"
-binaries="$binaries udevd udevadm kmod lsmod insmod setsid"
-
-HUGEBIN="$binaries"
-MINIMALBIN="sh mount kmod lsmod insmod udevd udevadm switch_root mkdir killall modprobe setsid"
-
-# extra modules for livecd
-extra_modules="cdrom mmc_core rtsx_pci rtsx_pci_sdmmc rtsx_pci_ms mmc_block ssb lpc_ich sdhci-acpi sdhci-pltfm sdhci sdhci-pci"
-
-WDIR="/tmp/mkinitramfs.$$"
+INITDIR="/tmp/mkinitramfs.$$"
 KERNEL_VERSION="$(uname -r)"
 INITIN="/usr/share/mkinitramfs/init.in"
 INITRAMFS="initrd-$KERNEL_VERSION.img"
 CONFIG="/etc/mkinitramfs.conf"
-UDEV_FILES="/etc/udev/udev.conf
-            /lib/udev/ata_id
-            /lib/udev/cdrom_id
-            /lib/udev/scsi_id
-            /lib/udev/rules.d/50-udev-default.rules
-            /lib/udev/rules.d/60-cdrom_id.
-            /lib/udev/rules.d/60-persistent-storage.rules
-            /lib/udev/rules.d/64-btrfs.rules
-            /lib/udev/rules.d/80-drivers.rules"
-HUGEMODULES="kernel/crypto
-             kernel/fs
-             kernel/drivers/block
-             kernel/drivers/ata
-             kernel/drivers/input
-             kernel/drivers/scsi
-             kernel/drivers/hid
-             kernel/drivers/usb/host
-             kernel/drivers/usb/storage"
+HOOKDIRS="/etc/mkinitramfs.d"
 
 main $@
