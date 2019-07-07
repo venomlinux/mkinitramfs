@@ -1,6 +1,8 @@
 #!/bin/bash
 
-build_hook() {		
+build_hook() {
+	local bin
+	
 	mkdir -p $INITDIR/{bin,dev,lib/firmware,run,sys,proc,usr}
 	mkdir -p $INITDIR/etc/{modprobe.d,udev/rules.d}
 	ln -s lib $INITDIR/lib64
@@ -11,10 +13,12 @@ build_hook() {
 	mknod -m 640 $INITDIR/dev/console c 5 1
 	mknod -m 664 $INITDIR/dev/null    c 1 3
 	
-	add_binary sh cat mv cp killall ls mkdir mount find xargs grep fgrep \
+	for bin in sh cat mv cp killall ls mkdir mount find xargs grep fgrep \
 		umount sed sleep ln rm uname chroot chmod \
 		readlink basename modprobe blkid switch_root \
-		kmod lsmod insmod setsid awk
+		kmod lsmod insmod setsid awk; do
+		add_binary $bin
+	done
 
 	add_file /usr/share/terminfo/l/linux
 }

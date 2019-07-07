@@ -1,15 +1,16 @@
 #!/bin/bash
 
 build_hook() {
-	add_file /etc/udev/udev.conf \
-             /lib/udev/rules.d/50-udev-default.rules \
-             /lib/udev/rules.d/60-persistent-storage.rules \
-             /lib/udev/rules.d/64-btrfs.rules \
-             /lib/udev/rules.d/80-drivers.rules
+	add_file /etc/udev/udev.conf
+	add_file /lib/udev/rules.d/50-udev-default.rules
+	add_file /lib/udev/rules.d/60-persistent-storage.rules
+	add_file /lib/udev/rules.d/64-btrfs.rules
+	add_file /lib/udev/rules.d/80-drivers.rules
 
-	add_binary udevd udevadm \
-	        /lib/udev/ata_id \
-	        /lib/udev/scsi_id
+	add_binary udevd
+	add_binary udevadm
+	add_binary /lib/udev/ata_id
+	add_binary /lib/udev/scsi_id
 }
 
 run_earlyhook() {

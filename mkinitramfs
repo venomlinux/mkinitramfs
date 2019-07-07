@@ -3,8 +3,12 @@
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
 
 add_binary() {
+	local binpath binlib
 	binpath=$(type -p $1)
-	[ "$binpath" ] || return
+	if [ -z "$binpath" ]; then
+		msgwarn "missing binary: $1"
+		return
+	fi
 	binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f1)
 	
 	[ -f "$binpath" ] || msgwarn "missing binary: $1"
@@ -23,34 +27,39 @@ add_binary() {
 		fi
 		unset lib
 	done
-	unset binpath binlib
-	shift
-	if [ "$1" ]; then
-		add_binary $@
-	fi
 }
 
 add_module() {
+	local modname modpath
 	[ "$1" ] || return
 	if modinfo $1 &>/dev/null; then
 		modname=$(modinfo -F name $1)
 		modpath=$(modinfo -F filename $1)
 	else
+		msg "missing module: $1"
 		return
 	fi
 	mkdir -p $INITDIR/lib/modules/$KERNEL_VERSION/kernel
 	cp $modpath $INITDIR/lib/modules/$KERNEL_VERSION/kernel
 	modinfo -F firmware -k $KERNEL_VERSION $modname | while read -r line; do
-		[ -f /lib/firmware/$line ] || msgwarn "missing firmware for $modname: $line"
-		add_file /lib/firmware/$line
+		if [ ! -f /lib/firmware/$line ]; then
+			msgwarn "missing firmware for $modname: $line"
+		else
+			add_file /lib/firmware/$line
+		fi
 	done
 	modinfo -F depends -k $KERNEL_VERSION $modname | while IFS=',' read -r -a line; do
-		add_module ${line[@]}
+		for l in ${line[@]}; do
+			add_module "$l"
+		done
 	done
-	unset modname modpath
-	shift
-	if [ "$1" ]; then
-		add_module $@
+}
+
+add_file() {
+	if [ "$1" ] && [ -f "$1" ]; then
+		cp --parent $1 $INITDIR
+	else
+		msgwarn "missing file: $1"
 	fi
 }
 
@@ -59,16 +68,6 @@ finalize_modules() {
 	cp /lib/modules/$KERNEL_VERSION/modules.* $INITDIR/lib/modules/$KERNEL_VERSION
 	awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $INITDIR/lib/modules/$KERNEL_VERSION/modules.order
 	depmod -b $INITDIR $KERNEL_VERSION
-}
-
-add_file() {
-	if [ "$1" ] && [ -f "$1" ]; then
-		cp --parent $1 $INITDIR
-	fi
-	shift
-	if [ "$1" ]; then
-		add_file $@
-	fi
 }
 
 run_build_hook() {
@@ -296,17 +295,23 @@ main() {
 	
 	if [ "${#BINARIES[@]}" -gt 0 ]; then
 		msg "adding extra binaries..."
-		add_binary ${BINARIES[@]}
+		for b in ${BINARIES[@]}; do
+			add_binary "$b"
+		done
 	fi
 	
 	if [ "${#MODULES[@]}" -gt 0 ]; then
 		msg "adding extra modules..."
-		add_module ${MODULES[@]}
+		for m in ${MODULES[@]}; do
+			add_module "$m"
+		done
 	fi
 	
 	if [ "${#FILES[@]}" -gt 0 ]; then
 		msg "adding extra files..."
-		add_file ${FILES[@]}
+		for f in ${FILES[@]}; do
+			add_file "$f"
+		done
 	fi
 	
 	finalize_modules
