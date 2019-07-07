@@ -12,7 +12,7 @@ build_hook() {
                 kernel/drivers/usb/storage"
 
 	for mod in $REQMODULES; do
-		FTGT="$FTGT /lib/modules/$KERNEL_VERSION/$mod"
+		FTGT="$FTGT /lib/modules/$KERNEL/$mod"
 	done
 	for modules in $(find $FTGT -type f -name "*.ko*" 2> /dev/null); do
 		modules=$(echo ${modules%*.ko*})

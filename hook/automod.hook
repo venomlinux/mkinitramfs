@@ -3,6 +3,7 @@
 build_hook() {
 	local mod
 	for mod in /sys/module/*; do
-		add_module $(basename $mod)
+		mod=$(basename $mod)
+		modinfo $mod &>/dev/null && add_module $mod
 	done
 }

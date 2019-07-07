@@ -1,6 +1,6 @@
 #!/bin/bash
 
-PATH=/bin:/usr/bin:/sbin:/usr/sbin
+PATH=$PATH:/sbin:/usr/sbin
 
 add_binary() {
 	local binpath binlib
@@ -10,28 +10,21 @@ add_binary() {
 		return
 	fi
 	binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f1)
-	
-	[ -f "$binpath" ] || msgwarn "missing binary: $1"
 	if [ -L $binpath ]; then
-		add_file $(type -p $(basename $(readlink $binpath)))
+		add_file $(readlink -f $binpath)
 	fi
 	add_file $binpath
-	
 	for lib in $binlib; do
 		case $lib in
 			linux-vdso.so.1|linux-gate.so.1) continue ;;
 		esac
-		lib=$(PATH=/lib:/lib64:/usr/lib:/usr/lib64 type -p $lib)
-		if [ "$lib" ] && [ ! -e $INITDIR/lib/$(basename $lib) ]; then
-			add_file $lib
-		fi
+		add_file $(PATH=/lib:/lib64:/usr/lib:/usr/lib64 type -p $lib)
 		unset lib
 	done
 }
 
 add_module() {
 	local modname modpath
-	[ "$1" ] || return
 	if modinfo $1 &>/dev/null; then
 		modname=$(modinfo -F name $1)
 		modpath=$(modinfo -F filename $1)
@@ -39,16 +32,15 @@ add_module() {
 		msg "missing module: $1"
 		return
 	fi
-	mkdir -p $INITDIR/lib/modules/$KERNEL_VERSION/kernel
-	cp $modpath $INITDIR/lib/modules/$KERNEL_VERSION/kernel
-	modinfo -F firmware -k $KERNEL_VERSION $modname | while read -r line; do
+	add_file "$modpath" /lib/modules/$KERNEL/kernel/$(basename $modpath)
+	modinfo -F firmware -k $KERNEL $modname | while read -r line; do
 		if [ ! -f /lib/firmware/$line ]; then
 			msgwarn "missing firmware for $modname: $line"
 		else
 			add_file /lib/firmware/$line
 		fi
 	done
-	modinfo -F depends -k $KERNEL_VERSION $modname | while IFS=',' read -r -a line; do
+	modinfo -F depends -k $KERNEL $modname | while IFS=',' read -r -a line; do
 		for l in ${line[@]}; do
 			add_module "$l"
 		done
@@ -56,44 +48,60 @@ add_module() {
 }
 
 add_file() {
-	if [ "$1" ] && [ -f "$1" ]; then
-		cp --parent $1 $INITDIR
-	else
-		msgwarn "missing file: $1"
+	local src=$1 dest=${2:-$1} mode=
+	
+	if [ ! -f "$src" ]; then
+		msgwarn "file not found: $src"
+		return
 	fi
+	
+	if [ "${src:0:1}" != "/" ]; then
+		msgwarn "absolute source path needed: $src"
+		return
+	fi
+	
+	if [ "${dest:0:1}" != "/" ]; then
+		msgwarn "absolute destination path needed: $dest"
+		return
+	fi
+	
+	mode=${3:-$(stat -c %a "$src")}
+	if [ -z "$mode" ]; then
+		msgwarn "failed get file mode: $src"
+		return
+	fi
+	
+	install -Dm$mode $src $INITDIR$dest
 }
 
 finalize_modules() {
-	[ -d $INITDIR/lib/modules/$KERNEL_VERSION/kernel ] || return
-	cp /lib/modules/$KERNEL_VERSION/modules.* $INITDIR/lib/modules/$KERNEL_VERSION
-	awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL_VERSION/modules.order > $INITDIR/lib/modules/$KERNEL_VERSION/modules.order
-	depmod -b $INITDIR $KERNEL_VERSION
+	local file
+	[ -d $INITDIR/lib/modules/$KERNEL/kernel ] || return
+	for file in /lib/modules/$KERNEL/modules.*; do
+		add_file $file
+	done
+	awk -F'/' '{ print "kernel/" $NF }' /lib/modules/$KERNEL/modules.order > $INITDIR/lib/modules/$KERNEL/modules.order
+	depmod -b $INITDIR $KERNEL
 }
 
 run_build_hook() {
-	if [ ! -d "$HOOKDIRS" ] && [ ! -d "$HOOKDIRSDATA" ]; then
-		return
-	fi
 	if [ "${#HOOKS[@]}" -gt 0 ]; then
 		for hook in ${HOOKS[@]}; do
 			[ "$(echo ${DONEHOOK[@]} | tr ' ' '\n' | grep -x $hook)" = "$hook" ] && continue
-			if [ -f "$HOOKDIRS"/$hook.hook ]; then
-				hookfullpath="$HOOKDIRS"/$hook.hook
-			elif [ -f "$HOOKDIRSDATA"/$hook.hook ]; then
-				hookfullpath="$HOOKDIRSDATA"/$hook.hook
+			hookpath=$(PATH=$HOOKDIRS type -p $hook.hook)
+			if [ "$hookpath" ]; then
+				source "$hookpath"
+				if [ "$(type -t build_hook)" = "function" ]; then
+					msg "running build_hook: $hook"
+					build_hook
+				fi
+				echo $hook >> $INITDIR/hook/hook.order
+				add_file "$hookpath" /hook/$hook 755
+				DONEHOOK+=($hook)
+				unset hookpath build_hook hook
 			else
 				msgwarn "missing hook: $hook"
-				continue
 			fi
-			source "$hookfullpath"
-			if [ "$(type -t build_hook)" = "function" ]; then
-				msg "running build_hook: $hook"
-				build_hook
-			fi
-			echo $hook >> $INITDIR/hook/hook.order
-			install -m755 "$hookfullpath" $INITDIR/hook/$hook
-			DONEHOOK+=($hook)
-			unset hookfullpath build_hook hook
 		done
 	fi
 }
@@ -128,7 +136,7 @@ Usage:
   $(basename $0) [option] [argument]
   
 Options:
-  -k <version>  custom kernel version (default: $KERNEL_VERSION)
+  -k <version>  custom kernel version (default: $KERNEL)
   -o <output>   custom output name (default: $INITRAMFS)
   -i <init>     custom init file (default: $INITIN)
   -m <modules>  add extra modules (comma separated)
@@ -161,10 +169,10 @@ parse_opt() {
 				OUTPUT=$2
 				shift 1 ;;
 			-i)	needarg $2
-				INIT=$2
+				INITIN=$2
 				shift 1 ;;
 			-c)	needarg $2
-				CUSTCONFIG=$2
+				CONFIG=$2
 				shift 1 ;;
 			-A)	needarg $2
 			    IFS=, read -r -a ADDEARLYHOOKS <<< $2
@@ -208,42 +216,27 @@ main() {
 	
 	if [ -f "$CONFIG" ]; then
 		. "$CONFIG"
-	fi
-	
-	if [ "$CUSTCONFIG" ]; then
-		if [ -f "$CUSTCONFIG" ]; then
-			. $CUSTCONFIG
-		else
-			msgerr "config file '$CUSTCONFIG' not exist."
-			exit 1
-		fi
-	fi
-	
-	if [ "$KERNEL" ]; then
-		if [ -d /lib/modules/"$KERNEL" ]; then
-			KERNEL_VERSION="$KERNEL"
-		else
-			msgerr "kernel directory '/lib/modules/$KERNEL' not exist."
-			exit 1
-		fi
 	else
-		if [ ! -d /lib/modules/"$KERNEL_VERSION" ]; then
-			NOKMOD=1
-		fi
+		msgerr "config file '$CONFIG' not exist."
+		exit 1
 	fi
 	
-	if [ "$INIT" ]; then
-		if [ -f "$INIT" ]; then
-			INITIN="$INIT"
-		else
-			msgerr "init file '$INIT' not exist."
-			exit 1
-		fi
+	if [ ! -d /lib/modules/"$KERNEL" ]; then
+		msgerr "kernel directory '/lib/modules/$KERNEL' not exist."
+		exit 1
+	fi
+	
+	if [ ! -f "$INITIN" ]; then
+		msgerr "init file '$INITIN' not exist."
+		exit 1
 	fi
 	
 	if [ "$OUTPUT" ]; then
 		if [ $(basename $OUTPUT) != "$OUTPUT" ] && [ ! -d $(dirname $OUTPUT) ]; then
 			msgerr "directory '$(dirname $OUTPUT)' for output '$(basename $OUTPUT)' not exist."
+			exit 1
+		elif [ -d "$OUTPUT" ]; then
+			msgerr "'$OUTPUT' is a directory."
 			exit 1
 		fi
 		INITRAMFS="$OUTPUT"
@@ -329,11 +322,10 @@ main() {
 trap "interrupted" SIGHUP SIGINT SIGQUIT SIGTERM
 
 INITDIR="/tmp/mkinitramfs.$$"
-KERNEL_VERSION="$(uname -r)"
+KERNEL="$(uname -r)"
 INITIN="/usr/share/mkinitramfs/init.in"
-INITRAMFS="initrd-$KERNEL_VERSION.img"
+INITRAMFS="initrd-$KERNEL.img"
 CONFIG="/etc/mkinitramfs.conf"
-HOOKDIRS="/etc/mkinitramfs.d"
-HOOKDIRSDATA="/usr/share/mkinitramfs/hooks"
+HOOKDIRS="/etc/mkinitramfs.d:/usr/share/mkinitramfs/hooks"
 
 main $@
