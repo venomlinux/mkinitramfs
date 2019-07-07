@@ -72,21 +72,29 @@ add_file() {
 }
 
 run_build_hook() {
-	local hook build_hook
-	[ -d "$HOOKDIRS" ] || return
+	if [ ! -d "$HOOKDIRS" ] && [ ! -d "$HOOKDIRSDATA" ]; then
+		return
+	fi
 	if [ "${#HOOKS[@]}" -gt 0 ]; then
 		for hook in ${HOOKS[@]}; do
 			[ "$(echo ${DONEHOOK[@]} | tr ' ' '\n' | grep -x $hook)" = "$hook" ] && continue
 			if [ -f "$HOOKDIRS"/$hook.hook ]; then
-				source "$HOOKDIRS"/$hook.hook
-				if [ "$(type -t build_hook)" = "function" ]; then
-					msg "running build_hook: $hook"
-					build_hook
-				fi
-				echo $hook >> $INITDIR/hook/hook.order
-				install -m755 "$HOOKDIRS"/$hook.hook $INITDIR/hook/$hook
-				DONEHOOK+=($hook)
+				hookfullpath="$HOOKDIRS"/$hook.hook
+			elif [ -f "$HOOKDIRSDATA"/$hook.hook ]; then
+				hookfullpath="$HOOKDIRSDATA"/$hook.hook
+			else
+				msgwarn "missing hook: $hook"
+				continue
 			fi
+			source "$hookfullpath"
+			if [ "$(type -t build_hook)" = "function" ]; then
+				msg "running build_hook: $hook"
+				build_hook
+			fi
+			echo $hook >> $INITDIR/hook/hook.order
+			install -m755 "$hookfullpath" $INITDIR/hook/$hook
+			DONEHOOK+=($hook)
+			unset hookfullpath build_hook hook
 		done
 	fi
 }
@@ -121,7 +129,7 @@ Usage:
   $(basename $0) [option] [argument]
   
 Options:
-  -k <version>  custom kernel version (default: $(uname -r))
+  -k <version>  custom kernel version (default: $KERNEL_VERSION)
   -o <output>   custom output name (default: $INITRAMFS)
   -i <init>     custom init file (default: $INITIN)
   -m <modules>  add extra modules (comma separated)
@@ -321,5 +329,6 @@ INITIN="/usr/share/mkinitramfs/init.in"
 INITRAMFS="initrd-$KERNEL_VERSION.img"
 CONFIG="/etc/mkinitramfs.conf"
 HOOKDIRS="/etc/mkinitramfs.d"
+HOOKDIRSDATA="/usr/share/mkinitramfs/hooks"
 
 main $@
