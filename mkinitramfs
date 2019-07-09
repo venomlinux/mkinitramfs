@@ -32,7 +32,7 @@ add_module() {
 		msg "missing module: $1"
 		return
 	fi
-	add_file "$modpath" /lib/modules/$KERNEL/kernel/$(basename $modpath)
+	add_file "$modpath" lib/modules/$KERNEL/kernel/$(basename $modpath)
 	modinfo -F firmware -k $KERNEL $modname | while read -r line; do
 		if [ ! -f /lib/firmware/$line ]; then
 			msgwarn "missing firmware for $modname: $line"
@@ -48,7 +48,11 @@ add_module() {
 }
 
 add_file() {
-	local src=$1 dest=${2:-$1} mode=
+	local src dest mode
+	
+	[ "$1" ] || return
+	
+	src=$1
 	
 	if [ ! -f "$src" ]; then
 		msgwarn "file not found: $src"
@@ -60,8 +64,14 @@ add_file() {
 		return
 	fi
 	
-	if [ "${dest:0:1}" != "/" ]; then
-		msgwarn "absolute destination path needed: $dest"
+	if [ -z "$2" ]; then
+		dest=${src/\//}
+	else
+		dest="$2"
+	fi
+	
+	if [ "${dest:0:1}" = "/" ]; then
+		msgwarn "destination path must without leading '/': $dest"
 		return
 	fi
 	
@@ -71,7 +81,7 @@ add_file() {
 		return
 	fi
 	
-	install -Dm$mode $src $INITDIR$dest
+	install -Dm$mode $src $INITDIR/$dest
 }
 
 finalize_modules() {
@@ -96,7 +106,7 @@ run_build_hook() {
 					build_hook
 				fi
 				echo $hook >> $INITDIR/hook/hook.order
-				add_file "$hookpath" /hook/$hook 755
+				add_file "$hookpath" hook/$hook 755
 				DONEHOOK+=($hook)
 				unset hookpath build_hook hook
 			else
