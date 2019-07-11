@@ -32,6 +32,9 @@ add_module() {
 		msg "missing module: $1"
 		return
 	fi
+	if [ -f $INITDIR/lib/modules/$KERNEL/kernel/$(basename $modpath) ]; then
+		return
+	fi
 	add_file "$modpath" lib/modules/$KERNEL/kernel/$(basename $modpath)
 	modinfo -F firmware -k $KERNEL $modname | while read -r line; do
 		if [ ! -f /lib/firmware/$line ]; then
