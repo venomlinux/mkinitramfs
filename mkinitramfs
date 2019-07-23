@@ -26,9 +26,9 @@ add_binary() {
 
 add_module() {
 	local modname modpath
-	if modinfo $1 &>/dev/null; then
-		modname=$(modinfo -F name $1)
-		modpath=$(modinfo -F filename $1)
+	if modinfo -k $KERNEL $1 &>/dev/null; then
+		modname=$(modinfo -k $KERNEL -F name $1)
+		modpath=$(modinfo -k $KERNEL -F filename $1)
 	else
 		msg "missing module: $1"
 		return
