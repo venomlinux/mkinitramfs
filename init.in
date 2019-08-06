@@ -36,12 +36,13 @@ parse_cmdline() {
 
 	for param in $cmdline ; do
 		case $param in
-			*=*) key=${param%%=*}
-				 value=${param#*=} ;;
+			*=*) key=${param%%=*}; value=${param#*=} ;;
+			'#'*) break ;;
 			*) key=$param
 		esac
 		case $key in
-			ro|rw) rwopt=$value ;;
+			ro|rw) rwopt=$key ;;
+			[![:alpha:]_]*|[[:alpha:]_]*[![:alnum:]_]*) ;;
 			*) eval "$key"=${value:-y} ;;
 		esac
 		unset key value

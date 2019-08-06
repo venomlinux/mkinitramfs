@@ -18,7 +18,9 @@ run_earlyhook() {
 		modprobe $mod 2>/dev/null
 	done
 	
-	mount_handler=mount_venomiso
+	if [ -z "$root" ]; then
+		mount_handler=mount_venomiso
+	fi
 }
 
 mount_venomiso() {
@@ -29,23 +31,37 @@ mount_venomiso() {
 	SYSTEM=/run/initramfs/system
 	WRITEDIR=/run/initramfs/overlayfs/write
 	WORKDIR=/run/initramfs/overlayfs/work
-	sfsimg=/run/initramfs/medium/filesystem/root.sfs
+	sfsimg=/run/initramfs/medium/venom/venomrootfs.sfs
+	listpkg=/run/initramfs/medium/venom/pkglist
+	delay=${delay:-5}
 	
 	mkdir -p $MEDIUM $SYSTEM $WRITEDIR $WORKDIR
 	
-	msg "mounting media to '$SYSTEM'..."
+	if [ ! -e $MEDIA ]; then
+		msg "wait $delay seconds..."
+		sleep $delay
+		if [ ! -e $MEDIA ]; then
+			msg "media is not appeared even after wait $delay seconds..."
+			msg "try increase delay by append 'delay=<seconds>' to boot cmdline"
+			sleep 9999
+		fi
+	fi
+	
+	msg "mounting media to $MEDIUM..."
 	mount -o ro $MEDIA $MEDIUM || problem
 	
 	if [ "$ram" = y ]; then
-		msg "mounting '/run/initramfs/copytoram' to ram..."
-		mkdir -p /run/initramfs/copytoram
-		mount -t tmpfs -o "size=75%",mode=0755 copytoram /run/initramfs/copytoram || problem
-		msg "copying squashfs img to '/run/initramfs/copytoram'..."
-		cp $sfsimg /run/initramfs/copytoram/ || problem
-		sfsimg=/run/initramfs/copytoram/root.sfs
+		msg "mounting /run/initramfs/ram to ram..."
+		mkdir -p /run/initramfs/ram
+		mount -t tmpfs -o "size=75%",mode=0755 ram /run/initramfs/ram || problem
+		msg "copying squashfs img to /run/initramfs/ram..."
+		cp $sfsimg /run/initramfs/ram/ || problem
+		cp $listpkg /run/initramfs/ram/ || problem
+		sfsimg=/run/initramfs/ram/venomrootfs.sfs
+		listpkg=/run/initramfs/ram/listpkg
 	fi
 	sfs_dev=$(losetup --find --show --read-only $sfsimg)
-	msg "mounting squashfs img to '$SYSTEM'..."
+	msg "mounting squashfs img to $SYSTEM..."
 	mount -o defaults -r $sfs_dev $SYSTEM || problem
 
 	# overlayfs mount	
@@ -62,7 +78,7 @@ mount_venomiso() {
 
 	# Execute custom script before switch root
 	if [ -f $newroot/root/custom_script.sh ]; then
-		msg "running 'custom_script.sh' script..."
+		msg "running custom_script.sh script..."
 		chmod +x $newroot/root/custom_script.sh
 		chroot $newroot bash /root/custom_script.sh 2>/dev/null
 	fi
