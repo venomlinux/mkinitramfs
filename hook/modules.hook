@@ -3,10 +3,16 @@
 build_hook() {
 	REQMODULES="kernel/crypto
                 kernel/fs
+                kernel/lib
                 kernel/drivers/block
                 kernel/drivers/ata
+                kernel/drivers/md
+                kernel/drivers/firewire
                 kernel/drivers/input
                 kernel/drivers/scsi
+                kernel/drivers/message
+                kernel/drivers/pcmcia
+                kernel/drivers/virtio
                 kernel/drivers/hid
                 kernel/drivers/usb/host
                 kernel/drivers/usb/storage"
