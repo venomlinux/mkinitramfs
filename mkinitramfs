@@ -88,6 +88,43 @@ add_file() {
 	install -Dm$mode $src $INITDIR/$dest
 }
 
+add_dir() {
+	local path=$1 mode=${2:-755}
+	
+	if [[ -z $path ]] || [[ $path != /?* ]]; then
+		return 1
+	fi
+	
+	if [[ -d $INITDIR$path ]]; then
+		return 0
+	fi
+	
+	install -dm$mode $INITDIR$path
+}
+
+add_symlink() {
+	local name=$1 target=$2
+	
+	if [[ -z $name ]]; then
+		return 1
+	fi
+	
+	if [[ -z $target ]]; then
+		target=$(readlink -f $name)
+		if [[ -z $target ]]; then
+			msgerr "invalid symlink: $name"
+			return 1
+		fi
+	fi
+	
+	# remove leading '/' from target
+	target=$(echo $target | sed 's,^/,,')
+	
+	add_dir "${name%/*}"
+	
+	ln -sfn $target $INITDIR$name
+}
+
 finalize_modules() {
 	local file
 	[ -d $INITDIR/lib/modules/$KERNEL/kernel ] || return
@@ -159,7 +196,7 @@ Options:
   -c <config>   use custom config (default: $CONFIG)
   -A <hook>     add extra hook (comma separated, precedence over -a, -s & HOOKS)
   -a <hook>     add extra hook (comma separated, precedence over -s & after HOOKS)
-  -s <hook>     skip hook defined in HOOKS
+  -s <hook>     skip hook defined in HOOKS (comma separated)
   -q            quiet mode
   -h            print this help msg
 	

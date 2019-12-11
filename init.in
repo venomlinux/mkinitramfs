@@ -96,7 +96,7 @@ parse_cmdline
 
 run_hook early
 
-if [ "$break" = "premount" ]; then
+if [ "$break" = "premount" ] || [ "$break" = "y" ]; then
 	echo "break on pre-mount requested"
 	echo "exit this shell to continue booting"
 	shell

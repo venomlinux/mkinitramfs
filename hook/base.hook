@@ -1,17 +1,17 @@
 #!/bin/bash
 
 build_hook() {
-	local bin
+	local bin dir
 	
-	mkdir -p $INITDIR/{bin,dev,lib/firmware,run,sys,proc,usr}
-	mkdir -p $INITDIR/etc/{modprobe.d,udev/rules.d}
-	ln -s lib $INITDIR/lib64
-	ln -s ../bin $INITDIR/usr/bin
-	ln -s bin $INITDIR/sbin
-	ln -s ../bin $INITDIR/usr/sbin
-
-	mknod -m 640 $INITDIR/dev/console c 5 1
-	mknod -m 664 $INITDIR/dev/null    c 1 3
+	for dir in bin dev lib/firmware run sys proc usr \
+		etc/modprobe.d etc/udev/rules.d; do
+		add_dir /$dir
+	done
+	
+	add_symlink /lib64 lib
+	add_symlink /usr/bin ../bin
+	add_symlink /sbin bin
+	add_symlink /usr/sbin ../bin
 	
 	for bin in sh cat mv cp killall ls mkdir mount find xargs grep fgrep \
 		umount sed sleep ln rm uname chroot chmod \
