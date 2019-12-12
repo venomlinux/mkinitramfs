@@ -1,6 +1,10 @@
 #!/bin/bash
+#
+# a simple initramfs generator inspired by Arch's mkinitcpio
+# but wrote it simpler
+#
 
-PATH=$PATH:/sbin:/usr/sbin
+PATH=/bin:/usr/bin:/sbin:/usr/sbin
 
 add_binary() {
 	local binpath binlib
@@ -117,12 +121,13 @@ add_symlink() {
 		fi
 	fi
 	
-	# remove leading '/' from target
-	target=$(echo $target | sed 's,^/,,')
-	
 	add_dir "${name%/*}"
 	
-	ln -sfn $target $INITDIR$name
+	if [[ -L $INITDIR$name ]]; then
+		msgwarn "overwriting symlink: $name"
+	fi
+	
+	ln -sfn "$target" $INITDIR$name
 }
 
 finalize_modules() {
@@ -217,7 +222,7 @@ parse_opt() {
 				KERNEL=$2
 				shift 1 ;;
 			-o)	needarg $2
-				OUTPUT=$2
+				IMAGE=$2
 				shift 1 ;;
 			-i)	needarg $2
 				INITIN=$2
@@ -282,15 +287,15 @@ main() {
 		exit 1
 	fi
 	
-	if [ "$OUTPUT" ]; then
-		if [ $(basename $OUTPUT) != "$OUTPUT" ] && [ ! -d $(dirname $OUTPUT) ]; then
-			msgerr "directory '$(dirname $OUTPUT)' for output '$(basename $OUTPUT)' not exist."
+	if [ "$IMAGE" ]; then
+		if [ $(basename $IMAGE) != "$IMAGE" ] && [ ! -d $(dirname $IMAGE) ]; then
+			msgerr "directory '$(dirname $IMAGE)' for output '$(basename $IMAGE)' not exist."
 			exit 1
-		elif [ -d "$OUTPUT" ]; then
-			msgerr "'$OUTPUT' is a directory."
+		elif [ -d "$IMAGE" ]; then
+			msgerr "'$IMAGE' is a directory."
 			exit 1
 		fi
-		INITRAMFS="$OUTPUT"
+		INITRAMFS="$IMAGE"
 	fi
 	
 	# filter out skip hooks (-s)
