@@ -222,7 +222,7 @@ parse_opt() {
 				KERNEL=$2
 				shift 1 ;;
 			-o)	needarg $2
-				IMAGE=$2
+				OUTPUT=$2
 				shift 1 ;;
 			-i)	needarg $2
 				INITIN=$2
@@ -287,15 +287,15 @@ main() {
 		exit 1
 	fi
 	
-	if [ "$IMAGE" ]; then
-		if [ $(basename $IMAGE) != "$IMAGE" ] && [ ! -d $(dirname $IMAGE) ]; then
-			msgerr "directory '$(dirname $IMAGE)' for output '$(basename $IMAGE)' not exist."
+	if [ "$OUTPUT" ]; then
+		if [ $(basename $OUTPUT) != "$OUTPUT" ] && [ ! -d $(dirname $OUTPUT) ]; then
+			msgerr "directory '$(dirname $OUTPUT)' for output '$(basename $OUTPUT)' not exist."
 			exit 1
-		elif [ -d "$IMAGE" ]; then
-			msgerr "'$IMAGE' is a directory."
+		elif [ -d "$OUTPUT" ]; then
+			msgerr "'$OUTPUT' is a directory."
 			exit 1
 		fi
-		INITRAMFS="$IMAGE"
+		INITRAMFS="$OUTPUT"
 	fi
 	
 	# filter out skip hooks (-s)
