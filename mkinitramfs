@@ -18,14 +18,17 @@ add_binary() {
 		add_binary $(readlink -f $binpath)
 		return
 	fi
-	binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f1)
-	for lib in $binlib; do
-		case $lib in
-			linux-vdso.so.1|linux-gate.so.1) continue ;;
-		esac
-		add_file $(PATH=/lib:/lib64:/usr/lib:/usr/lib64 type -p $lib)
-		unset lib
-	done
+	case "$(file -bi $binpath)" in
+		*application/x-sharedlib* | *application/x-executable* | *application/x-pie-executable*)
+			binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f1)
+			for lib in $binlib; do
+				case $lib in
+					linux-vdso.so.1|linux-gate.so.1) continue ;;
+				esac
+				add_file $(PATH=/lib:/lib64:/usr/lib:/usr/lib64 type -p $lib)
+				unset lib
+			done;;
+	esac
 }
 
 add_module() {
