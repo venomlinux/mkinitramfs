@@ -14,7 +14,7 @@ add_binary() {
 		return
 	fi
 	add_file $binpath
-	if [ -L $binpath ]; then
+	if [ -L "$binpath" ]; then
 		add_binary $(readlink -f $binpath)
 		return
 	fi
@@ -40,9 +40,7 @@ add_module() {
 		msg "missing module: $1"
 		return
 	fi
-	if [ -f $INITDIR/lib/modules/$KERNEL/kernel/$(basename $modpath) ]; then
-		return
-	fi
+	[ -f $INITDIR/lib/modules/$KERNEL/kernel/$(basename $modpath) ] && return
 	add_file "$modpath" lib/modules/$KERNEL/kernel/$(basename $modpath)
 	modinfo -F firmware -k $KERNEL $modname | while read -r line; do
 		if [ ! -f /lib/firmware/$line ]; then
@@ -112,13 +110,11 @@ add_dir() {
 add_symlink() {
 	local name=$1 target=$2
 	
-	if [[ -z $name ]]; then
-		return 1
-	fi
+	[ "$name" ] || return 1
 	
-	if [[ -z $target ]]; then
+	if [ ! "$target" ]; then
 		target=$(readlink -f $name)
-		if [[ -z $target ]]; then
+		if [ ! "$target" ]; then
 			msgerr "invalid symlink: $name"
 			return 1
 		fi
@@ -126,7 +122,7 @@ add_symlink() {
 	
 	add_dir "${name%/*}"
 	
-	if [[ -L $INITDIR$name ]]; then
+	if [ -L "$INITDIR$name" ]; then
 		msgwarn "overwriting symlink: $name"
 	fi
 	
@@ -166,17 +162,17 @@ run_build_hook() {
 }
 
 msg() {
-	[ $QUIET ] && return
+	[ "$QUIET" ] && return
 	echo ":: $@"
 }
 
 msgerr() {
-	[ $QUIET ] && return
+	[ "$QUIET" ] && return
 	echo "ERROR: $@"
 }
 
 msgwarn() {
-	[ $QUIET ] && return
+	[ "$QUIET" ] && return
 	echo "WARNING: $@"
 }
 
@@ -339,7 +335,7 @@ main() {
 		BINARIES+=(${ADDBINARIES[@]})
 	fi
 
-	[ $QUIET ] || echo "Generating initramfs..."
+	[ "$QUIET" ] || echo "Generating initramfs..."
 	
 	mkdir -p $INITDIR/{hook,newroot}
 	install -m0755 $INITIN $INITDIR/init
@@ -373,7 +369,7 @@ main() {
 	( cd $INITDIR ; find . | LANG=C bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
 
 	cleanup
-	[ $QUIET ] || echo "Generating initramfs done: $INITRAMFS ($(du -h $INITRAMFS | awk '{print $1}'))"
+	[ "$QUIET" ] || echo "Generating initramfs done: $INITRAMFS ($(du -h $INITRAMFS | awk '{print $1}'))"
 	
 	exit 0
 }
