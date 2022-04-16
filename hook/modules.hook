@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 build_hook() {
 	REQMODULES="kernel/crypto
@@ -22,6 +22,6 @@ build_hook() {
 	done
 	for modules in $(find $FTGT -type f -name "*.ko*" 2> /dev/null); do
 		modules=$(echo ${modules%*.ko*})
-		add_module $(basename $modules)
+		add_module ${modules##*/}
 	done
 }

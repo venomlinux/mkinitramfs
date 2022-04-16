@@ -1,7 +1,6 @@
-#!/bin/bash
+#!/bin/sh
 
-PATH=/bin:/usr/bin:/sbin:/usr/sbin
-export PATH
+export PATH=/bin:/usr/bin:/sbin:/usr/sbin
 
 shell() {
 	setsid sh -c 'exec sh </dev/tty1 >/dev/tty1 2>&1'
@@ -68,22 +67,22 @@ mount_root() {
 }
 
 run_hook() {
-	local stage=$1
-	local line
+	stage=$1
 	if [ -f /hook/hook.order ]; then
 		case $stage in
 			cleanup) sed '1!G;h;$!d' /hook/hook.order > /hook/hook.orderreverse
 					 mv /hook/hook.orderreverse /hook/hook.order ;;
 		esac
 		while read -r line; do
-			source /hook/$line
-			if [ "$(type -t run_${stage}hook)" = "function" ]; then
+			. /hook/$line
+			if [ "$(command -v run_${stage}hook)" ]; then
 				msg "running ${stage}hook: $line"
 				run_${stage}hook
 			fi
 			unset -f run_earlyhook run_latehook run_cleanuphook build_hook
 		done < /hook/hook.order
 	fi
+	unset stage line
 }
 
 mount_handler=mount_root
@@ -91,9 +90,7 @@ init=/sbin/init
 rootfstype=auto
 
 mount_setup
-
 parse_cmdline
-
 run_hook early
 
 if [ "$break" = "premount" ] || [ "$break" = "y" ]; then
@@ -103,7 +100,6 @@ if [ "$break" = "premount" ] || [ "$break" = "y" ]; then
 fi
 
 $mount_handler /newroot
-
 run_hook late
 run_hook cleanup
 

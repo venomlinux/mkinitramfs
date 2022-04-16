@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 build_hook() {
 	add_file /etc/udev/udev.conf

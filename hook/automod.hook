@@ -1,9 +1,8 @@
-#!/bin/bash
+#!/bin/sh
 
 build_hook() {
-	local mod
 	for mod in /sys/module/*; do
 		mod=$(basename $mod)
-		modinfo -k $KERNEL $mod &>/dev/null && add_module $mod
+		modinfo -k $KERNEL $mod >/dev/null 2>&1 && add_module $mod
 	done
 }

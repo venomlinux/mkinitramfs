@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 #
 # a simple initramfs generator inspired by Arch's mkinitcpio
 # but wrote it simpler
@@ -7,33 +7,29 @@
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
 
 add_binary() {
-	local binpath binlib
-	binpath=$(type -p $1)
+	binpath=$(command -v $1)
 	if [ -z "$binpath" ]; then
-		msgwarn "missing binary: $1"
+		msgwarn "missing binary: $binpath"
 		return
 	fi
 	add_file $binpath
-	if [ -L "$binpath" ]; then
+	if [ -L $binpath ]; then
 		add_binary $(readlink -f $binpath)
 		return
 	fi
 	case "$(file -bi $binpath)" in
 		*application/x-sharedlib* | *application/x-executable* | *application/x-pie-executable*)
-			binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f1)
+			binlib=$(ldd $binpath | grep -v "not" | sed "s/\t//" | cut -d " " -f3 | sed '/^$/d')
 			for lib in $binlib; do
-				case $lib in
-					linux-vdso.so.1|linux-gate.so.1) continue ;;
-				esac
-				add_file $(PATH=/lib:/lib64:/usr/lib:/usr/lib64 type -p $lib)
+				add_file $lib
 				unset lib
 			done;;
 	esac
+	unset binpath binlib
 }
 
 add_module() {
-	local modname modpath
-	if modinfo -k $KERNEL $1 &>/dev/null; then
+	if modinfo -k $KERNEL $1 >/dev/null 2>&1; then
 		modname=$(modinfo -k $KERNEL -F name $1 | cut -d ' ' -f1 | head -n1)
 		[ "$modname" = "name:" ] && return 0
 		modpath=$(modinfo -k $KERNEL -F filename $1 | cut -d ' ' -f1 | head -n1)
@@ -42,8 +38,10 @@ add_module() {
 		msg "missing module: $1"
 		return
 	fi
-	[ -f $INITDIR/lib/modules/$KERNEL/kernel/$(basename $modpath) ] && return
-	add_file "$modpath" lib/modules/$KERNEL/kernel/$(basename $modpath)
+	if [ -f $INITDIR/lib/modules/$KERNEL/kernel/${modpath##*/} ]; then
+		return
+	fi
+	add_file "$modpath" lib/modules/$KERNEL/kernel/${modpath##*/}
 	modinfo -F firmware -k $KERNEL $modname | while read -r line; do
 		if [ ! -f /lib/firmware/$line ]; then
 			msgwarn "missing firmware for $modname: $line"
@@ -51,39 +49,36 @@ add_module() {
 			add_file /lib/firmware/$line
 		fi
 	done
-	modinfo -F depends -k $KERNEL $modname | while IFS=',' read -r -a line; do
-		for l in ${line[@]}; do
-			add_module "$l"
-		done
+	for i in $(modinfo -F depends -k $KERNEL $modname | tr ',' ' '); do
+		add_module $i
 	done
+	unset modname modpath
 }
 
 add_file() {
-	local src dest mode
-	
 	[ "$1" ] || return
 	
 	src=$1
+	
+	if [ "$(echo $src | head -c1)" != "/" ]; then
+		msgwarn "absolute source path needed: $src"
+		return
+	fi
 	
 	if [ ! -f "$src" ]; then
 		msgwarn "file not found: $src"
 		return
 	fi
 	
-	if [ "${src:0:1}" != "/" ]; then
-		msgwarn "absolute source path needed: $src"
+	if [ "$(echo $dest | head -c1)" = "/" ]; then
+		msgwarn "destination path must without leading '/': $dest"
 		return
 	fi
 	
 	if [ -z "$2" ]; then
-		dest=${src/\//}
+		dest=$(echo $src | sed 's,^/,,')
 	else
 		dest="$2"
-	fi
-	
-	if [ "${dest:0:1}" = "/" ]; then
-		msgwarn "destination path must without leading '/': $dest"
-		return
 	fi
 	
 	mode=${3:-$(stat -c %a "$src")}
@@ -93,24 +88,35 @@ add_file() {
 	fi
 	
 	install -Dm$mode $src $INITDIR/$dest
+	
+	unset src dest mode
 }
 
 add_dir() {
-	local path=$1 mode=${2:-755}
+	path=$1
+	mode=${2:-755}
 	
-	if [[ -z $path ]] || [[ $path != /?* ]]; then
+	if [ -z "$path" ]; then
 		return 1
 	fi
 	
-	if [[ -d $INITDIR$path ]]; then
+	case $path in
+		/*) ;;
+		 *) return 1;;
+	esac
+	
+	if [ -d "$INITDIR$path" ]; then
 		return 0
 	fi
 	
 	install -dm$mode $INITDIR$path
+	
+	unset path
 }
 
 add_symlink() {
-	local name=$1 target=$2
+	name=$1
+	target=$2
 	
 	[ "$name" ] || return 1
 	
@@ -132,7 +138,6 @@ add_symlink() {
 }
 
 finalize_modules() {
-	local file
 	[ -d $INITDIR/lib/modules/$KERNEL/kernel ] || return
 	for file in /lib/modules/$KERNEL/modules.*; do
 		add_file $file
@@ -142,19 +147,19 @@ finalize_modules() {
 }
 
 run_build_hook() {
-	if [ "${#HOOKS[@]}" -gt 0 ]; then
-		for hook in ${HOOKS[@]}; do
-			[ "$(echo ${DONEHOOK[@]} | tr ' ' '\n' | grep -x $hook)" = "$hook" ] && continue
-			hookpath=$(PATH=$HOOKDIRS type -p $hook.hook)
+	if [ "$HOOKS" ]; then
+		for hook in $HOOKS; do
+			[ "$(echo $DONEHOOK | tr ' ' '\n' | grep -x $hook)" = "$hook" ] && continue
+			hookpath=$(PATH=$HOOKDIRS command -v $hook.hook)
 			if [ "$hookpath" ]; then
-				source "$hookpath"
-				if [ "$(type -t build_hook)" = "function" ]; then
+				. "$hookpath"
+				if [ "$(command -v build_hook)" ]; then
 					msg "running build_hook: $hook"
 					build_hook
 				fi
 				echo $hook >> $INITDIR/hook/hook.order
 				add_file "$hookpath" hook/$hook 755
-				DONEHOOK+=($hook)
+				DONEHOOK="$DONEHOOK $hook"
 				unset hookpath build_hook hook
 			else
 				msgwarn "missing hook: $hook"
@@ -164,18 +169,18 @@ run_build_hook() {
 }
 
 msg() {
-	[ "$QUIET" ] && return
-	echo ":: $@"
+	[ $QUIET ] && return
+	echo ":: $*"
 }
 
 msgerr() {
-	[ "$QUIET" ] && return
-	echo "ERROR: $@"
+	[ $QUIET ] && return
+	echo "ERROR: $*"
 }
 
 msgwarn() {
-	[ "$QUIET" ] && return
-	echo "WARNING: $@"
+	[ $QUIET ] && return
+	echo "WARNING: $*"
 }
 
 cleanup() {
@@ -232,22 +237,22 @@ parse_opt() {
 				CONFIG=$2
 				shift 1 ;;
 			-A)	needarg $2
-			    IFS=, read -r -a ADDEARLYHOOKS <<< $2
+			    ADDEARLYHOOKS=$(echo $2 | tr ',' ' ')
 				shift 1 ;;
 			-a)	needarg $2
-			    IFS=, read -r -a ADDHOOKS <<< $2
+			    ADDHOOKS=$(echo $2 | tr ',' ' ')
 				shift 1 ;;
 			-s)	needarg $2
-			    IFS=, read -r -a SKIPHOOKS <<< $2
+			    SKIPHOOKS=$(echo $2 | tr ',' ' ')
 				shift 1 ;;
 			-m) needarg $2
-			    IFS=, read -r -a ADDMODULES <<< $2
+			    ADDMODULES=$(echo $2 | tr ',' ' ')
 				shift 1 ;;
 			-b) needarg $2
-			    IFS=, read -r -a ADDBINARIES <<< $2
+			    ADDBINARIES=$(echo $2 | tr ',' ' ')
 				shift 1 ;;
 			-f) needarg $2
-			    IFS=, read -r -a ADDFILES <<< $2
+			    ADDFILES=$(echo $2 | tr ',' ' ')
 				shift 1 ;;
 			-q)	QUIET=1 ;;
 			-h)	usage; exit 0 ;;
@@ -259,14 +264,14 @@ parse_opt() {
 }
 
 main() {
-	parse_opt $@
+	parse_opt "$@"
 
-	if [ "$UID" != "0" ]; then
+	if [ "$(id -u)" != "0" ]; then
 		msgerr "need root access!"
 		exit 1
 	fi
 	
-	if [ ! $(type -p bsdcpio) ]; then
+	if [ ! $(command -v bsdcpio) ]; then
 		msgerr "'bsdcpio' not found, please install 'libarchive' package."
 		exit 1
 	fi
@@ -300,66 +305,63 @@ main() {
 	fi
 	
 	# filter out skip hooks (-s)
-	if [ "${#SKIPHOOKS[@]}" -gt 0 ] && [ "${#HOOKS[@]}" -gt 0 ]; then
-		for s in ${!SKIPHOOKS[@]}; do
-			for h in ${!HOOKS[@]}; do
-				if [ "${SKIPHOOKS[s]}" = "${HOOKS[h]}" ]; then
-					unset 'HOOKS[h]'
-					break
-				fi
-			done
+	if [ "$SKIPHOOKS" ] && [ "$HOOKS" ]; then
+		for h in $HOOKS; do
+			echo $SKIPHOOKS | tr ' ' '\n' | grep -x $h >/dev/null 2>&1 || NEWHOOKS="$NEWHOOKS $h"
 		done
+		HOOKS=$NEWHOOKS
+		unset NEWHOOKS
 	fi
 	
 	# add extra hooks (-a)
-	if [ "${#ADDHOOKS[@]}" -gt 0 ]; then
-		HOOKS+=(${ADDHOOKS[@]})
+	if [ "$ADDHOOKS" ]; then
+		HOOKS="$HOOKS $ADDHOOKS"
 	fi
 	
 	# add extra early hooks (-A)
-	if [ "${#ADDEARLYHOOKS[@]}" -gt 0 ]; then
-		ADDEARLYHOOKS+=(${HOOKS[@]})
-		HOOKS=(${ADDEARLYHOOKS[@]})
+	if [ "$ADDEARLYHOOKS" ]; then
+		ADDEARLYHOOKS="$ADDEARLYHOOKS $HOOKS"
+		HOOKS="$ADDEARLYHOOKS"
 	fi
 	
 	# add extra modules (-m)
-	if [ "${#ADDMODULES[@]}" -gt 0 ]; then
-		MODULES+=(${ADDMODULES[@]})
+	if [ "$ADDMODULES" ]; then
+		MODULES="$MODULES $ADDMODULES"
 	fi
 	
 	# add extra files (-f)
-	if [ "${#ADDFILES[@]}" -gt 0 ]; then
-		FILES+=(${ADDFILES[@]})
+	if [ "$ADDFILES" ]; then
+		FILES="$FILES $ADDFILES"
 	fi
 	
 	# add extra binary (-b)
-	if [ "${#ADDBINARIES[@]}" -gt 0 ]; then
-		BINARIES+=(${ADDBINARIES[@]})
+	if [ "$ADDBINARIES" ]; then
+		BINARIES="$BINARIES $ADDBINARIES"
 	fi
 
-	[ "$QUIET" ] || echo "Generating initramfs..."
+	[ $QUIET ] || echo "Generating initramfs..."
 	
-	mkdir -p $INITDIR/{hook,newroot}
+	mkdir -p $INITDIR/hook $INITDIR/newroot
 	install -m0755 $INITIN $INITDIR/init
 	run_build_hook
 	
-	if [ "${#BINARIES[@]}" -gt 0 ]; then
+	if [ "$BINARIES"  ]; then
 		msg "adding extra binaries..."
-		for b in ${BINARIES[@]}; do
+		for b in $BINARIES; do
 			add_binary "$b"
 		done
 	fi
 	
-	if [ "${#MODULES[@]}" -gt 0 ]; then
+	if [ "$MODULES" ]; then
 		msg "adding extra modules..."
-		for m in ${MODULES[@]}; do
+		for m in $MODULES; do
 			add_module "$m"
 		done
 	fi
 	
-	if [ "${#FILES[@]}" -gt 0 ]; then
+	if [ "$FILES" ]; then
 		msg "adding extra files..."
-		for f in ${FILES[@]}; do
+		for f in $FILES; do
 			add_file "$f"
 		done
 	fi
@@ -371,12 +373,12 @@ main() {
 	( cd $INITDIR ; find . | LANG=C bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
 
 	cleanup
-	[ "$QUIET" ] || echo "Generating initramfs done: $INITRAMFS ($(du -h $INITRAMFS | awk '{print $1}'))"
+	[ $QUIET ] || echo "Generating initramfs done: $INITRAMFS ($(du -h $INITRAMFS | awk '{print $1}'))"
 	
 	exit 0
 }
 
-trap "interrupted" SIGHUP SIGINT SIGQUIT SIGTERM
+trap "interrupted" 1 2 3 15
 
 INITDIR="/tmp/mkinitramfs.$$"
 KERNEL="$(uname -r)"
@@ -385,4 +387,4 @@ INITRAMFS="initrd-$KERNEL.img"
 CONFIG="/etc/mkinitramfs.conf"
 HOOKDIRS="/etc/mkinitramfs.d:/usr/share/mkinitramfs/hooks"
 
-main $@
+main "$@"
