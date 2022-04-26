@@ -53,13 +53,21 @@ parse_cmdline() {
 		LABEL=*) eval $root; device="/dev/disk/by-label/$LABEL" ;;
 	esac
 }
-	
+
+
+mount_crypt() {
+	test -f /sbin/cryptsetup && /sbin/cryptsetup luksOpen $device venom
+	test -f /sbin/lvm && lvm vgchange -ay --sysinit
+	test -f /sbin/cryptsetup && device=/dev/dm-1
+}
+
 mount_root() {
 	newroot=$1
 	if [ ! "$device" ]; then
 		echo "device not scpecified!"
 		shell
 	fi
+	mount_crypt
 	if ! mount -n ${rootfstype:+-t $rootfstype} -o ${rwopt:-ro}${rootflags:+,$rootflags} "$device" "$newroot" ; then
 		echo "cant mount: $device"
 		shell
@@ -88,8 +96,14 @@ run_hook() {
 mount_handler=mount_root
 init=/sbin/init
 rootfstype=auto
+CONSOLE=/dev/tty1
 
 mount_setup
+
+# take control of tty1 and disable output from spamming console
+exec >${CONSOLE} <${CONSOLE} 2>&1
+echo 1 > /proc/sys/kernel/printk
+
 parse_cmdline
 run_hook early
 
