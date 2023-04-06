@@ -9,7 +9,7 @@ PATH=/bin:/usr/bin:/sbin:/usr/sbin
 add_binary() {
 	binpath=$(command -v $1)
 	if [ -z "$binpath" ]; then
-		msgwarn "missing binary: $binpath"
+		msgwarn "missing binary: $1"
 		return
 	fi
 	add_file $binpath
@@ -271,8 +271,9 @@ main() {
 		exit 1
 	fi
 	
-	if [ ! $(command -v bsdcpio) ]; then
-		msgerr "'bsdcpio' not found, please install 'libarchive' package."
+	CPIO=$(command -v bsdcpio) || CPIO=$(command -v cpio)
+	if [ ! "$CPIO" ]; then
+		msgerr "neither 'bsdcpio' or 'cpio' found, exiting..."
 		exit 1
 	fi
 	
@@ -370,7 +371,7 @@ main() {
 
 	msg "generating initramfs..."
 	rm -f "$INITRAMFS"
-	( cd $INITDIR ; find . | LANG=C bsdcpio -o -H newc --quiet | gzip -9 ) > $INITRAMFS
+	( cd $INITDIR ; find . | LANG=C $CPIO -o -H newc --quiet | gzip -9 ) > $INITRAMFS
 
 	cleanup
 	[ $QUIET ] || echo "Generating initramfs done: $INITRAMFS ($(du -h $INITRAMFS | awk '{print $1}'))"
