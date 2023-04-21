@@ -146,11 +146,20 @@ finalize_modules() {
 	depmod -b $INITDIR $KERNEL
 }
 
+get_hook_path() {
+	case $1 in
+		*/*) [ -f $1 ] && echo $1;;
+		*) for i in $(echo $HOOKDIRS | tr ':' ' '); do
+			   [ -f $i/$1 ] && echo $i/$1; break
+		   done;;
+	esac
+}
+
 run_build_hook() {
 	if [ "$HOOKS" ]; then
 		for hook in $HOOKS; do
 			[ "$(echo $DONEHOOK | tr ' ' '\n' | grep -x $hook)" = "$hook" ] && continue
-			hookpath=$(PATH=$HOOKDIRS command -v $hook.hook)
+			hookpath=$(get_hook_path $hook.hook)
 			if [ "$hookpath" ]; then
 				. "$hookpath"
 				if [ "$(command -v build_hook)" ]; then
