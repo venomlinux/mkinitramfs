@@ -1,7 +1,16 @@
 #!/bin/sh -e
 
+[ -f /etc/mkinitramfs.conf ] && . /etc/mkinitramfs.conf
+
 [ "$1" ] || exit 1
 
-gzip -dc "$1" | bsdcpio -it
+case $INITFSCOMP in
+    gzip) compressor="gzip -dc" ;;
+     lz4) compressor="lz4 -d -c" ;;
+     cat) compressor="cat --" ;;
+      xz) compressor="xzcat --" ;;
+    zstd) compressor="zstd -d -c" ;;
+esac
 
+$compressor "$1" | bsdcpio -it
 exit 0
