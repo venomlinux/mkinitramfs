@@ -195,7 +195,7 @@ case "$INITFSCOMP" in
 	zstd) cmd_exists zstd; comp="zstd -T0 $complevel_zstd" ;;
 	lz4) cmd_exists lz4; comp="lz4 --favor-decSpeed -lz $complevel_lz4" ;;
 	none) comp="cat";;
-	*) msgerr "Initramfs compression $INITFSCOMP not supported!" ; exit 1 ;;
+	*) comp="gzip" ;;
 esac
 }
 
