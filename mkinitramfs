@@ -177,6 +177,29 @@ run_build_hook() {
 	fi
 }
 
+cmd_exists() {
+
+cmd="$1"
+command -v "$cmd" >/dev/null 2>&1 || msgerr "Command $cmd is not available."
+}
+
+add_compression() {
+complevel_gzip="${complevel_gzip:--9}"
+complevel_xz="${complevel_xz:--9}"
+complevel_zstd="${complevel_zstd:--19}"
+complevel_lz4="${complevel_lz4:--12}"
+
+case "$INITFSCOMP" in
+	gzip) comp="$(command -v gzip 2>/dev/null || echo gzip) $complevel_gzip" ;;
+	xz) cmd_exists xz; comp="xz -C crc32 -T0 $complevel_xz" ;;
+	zstd) cmd_exists zstd; comp="zstd -T0 $complevel_zstd" ;;
+	lz4) cmd_exists lz4; comp="lz4 --favor-decSpeed -lz $complevel_lz4" ;;
+	none) comp="cat";;
+	*) msgerr "Initramfs compression $INITFSCOMP not supported!" ; exit 1 ;;
+esac
+}
+
+
 msg() {
 	[ $QUIET ] && return
 	echo ":: $*"
@@ -214,6 +237,7 @@ Options:
   -b <binaries  add extra binary (comma separated)
   -f <file>     add extra file (comma separated & absolute path)
   -c <config>   use custom config (default: $CONFIG)
+  -C <compression> (gzip|xz|zstd|lz4|none defaults to $INITFSCOMP)
   -A <hook>     add extra hook (comma separated, precedence over -a, -s & HOOKS)
   -a <hook>     add extra hook (comma separated, precedence over -s & after HOOKS)
   -s <hook>     skip hook defined in HOOKS (comma separated)
@@ -244,6 +268,9 @@ parse_opt() {
 				shift 1 ;;
 			-c)	needarg $2
 				CONFIG=$2
+				shift 1 ;;
+			-C)	needarg $2
+				INITFSCOMP=$2
 				shift 1 ;;
 			-A)	needarg $2
 			    ADDEARLYHOOKS=$(echo $2 | tr ',' ' ')
@@ -285,7 +312,7 @@ main() {
 		msgerr "neither 'bsdcpio' or 'cpio' found, exiting..."
 		exit 1
 	fi
-	
+
 	if [ -f "$CONFIG" ]; then
 		. "$CONFIG"
 	else
@@ -375,12 +402,14 @@ main() {
 			add_file "$f"
 		done
 	fi
+
+	add_compression
 	
 	finalize_modules
 
 	msg "generating initramfs..."
 	rm -f "$INITRAMFS"
-	( cd $INITDIR ; find . | LANG=C $CPIO -o -H newc --quiet | gzip -9 ) > $INITRAMFS
+	( cd $INITDIR ; find . | LANG=C $CPIO -o -H newc --quiet | $comp ) > $INITRAMFS
 
 	cleanup
 	[ $QUIET ] || echo "Generating initramfs done: $INITRAMFS ($(du -h $INITRAMFS | awk '{print $1}'))"
